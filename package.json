@@ -1,0 +1,15 @@
+{
+  "name": "airtable-sellsy-invoice-generator",
+  "version": "1.0.0",
+  "description": "Génération automatique de factures Sellsy depuis Airtable",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "airtable": "^0.12.2",
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1"
+  }
+}
