@@ -26,3 +26,19 @@ export function calculateDueDate(date, days = 0) {
   dueDate.setDate(dueDate.getDate() + days);
   return formatDate(dueDate);
 }
+
+/**
+ * Vérifie si une date est aujourd'hui
+ * @param {Date|string} date - La date à vérifier
+ * @returns {boolean} - Vrai si la date est aujourd'hui
+ */
+export function isToday(date) {
+  const today = new Date();
+  const checkDate = new Date(date);
+  
+  return (
+    today.getDate() === checkDate.getDate() &&
+    today.getMonth() === checkDate.getMonth() &&
+    today.getFullYear() === checkDate.getFullYear()
+  );
+}
