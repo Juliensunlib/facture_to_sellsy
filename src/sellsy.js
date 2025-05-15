@@ -82,10 +82,33 @@ async function findPaymentMethodByName(name) {
       method.label.toLowerCase().includes(name.toLowerCase())
     );
     
-    return paymentMethod ? paymentMethod.id : null;
+    if (!paymentMethod) {
+      throw new Error(`Méthode de paiement "${name}" non trouvée dans Sellsy`);
+    }
+    
+    return paymentMethod.id;
   } catch (error) {
     console.error('❌ Erreur lors de la recherche de la méthode de paiement:', error);
-    return null;
+    throw error;
+  }
+}
+
+/**
+ * Configure les options de prélèvement GoCardless sur une facture
+ */
+async function configureGoCardlessPayment(invoiceId) {
+  try {
+    // Configurer le paiement par prélèvement GoCardless
+    await sellsyRequest('post', `/invoices/${invoiceId}/payment-details`, {
+      payment_method_id: await findPaymentMethodByName('gocardless'),
+      payment_terms: "on_receipt", // Paiement à réception
+      use_direct_debit: true       // Utiliser le prélèvement automatique
+    });
+    
+    return true;
+  } catch (error) {
+    console.error(`❌ Erreur lors de la configuration du prélèvement GoCardless:`, error);
+    throw error;
   }
 }
 
@@ -104,18 +127,13 @@ export async function generateInvoice({
     // 1. Trouver l'ID de la méthode de paiement GoCardless
     const paymentMethodId = await findPaymentMethodByName(paymentMethod);
     
-    if (!paymentMethodId) {
-      throw new Error(`Méthode de paiement "${paymentMethod}" non trouvée`);
-    }
-    
     // 2. Préparer les données de la facture
     const today = new Date();
-    const dueDate = new Date(today);
-    dueDate.setDate(dueDate.getDate() + 1); // Paiement à réception (J+1)
+    const dueDate = new Date(today); // Date d'échéance = aujourd'hui (paiement à réception)
     
     const invoiceData = {
       date: today.toISOString().split('T')[0],
-      due_date: dueDate.toISOString().split('T')[0],
+      due_date: today.toISOString().split('T')[0], // Même date = paiement à réception
       subject: `Abonnement mensuel - ${serviceName}`,
       related: [
         {
@@ -132,13 +150,17 @@ export async function generateInvoice({
           unit_price: parseFloat(price),
           tax_rate: parseFloat(taxRate)
         }
-      ]
+      ],
+      note: "Facture prélevée automatiquement par GoCardless à réception. Aucune action requise de votre part."
     };
     
     // 3. Créer la facture
     const invoice = await sellsyRequest('post', '/invoices', invoiceData);
     
-    // 4. Valider la facture (passer de brouillon à émise)
+    // 4. Configurer le prélèvement GoCardless
+    await configureGoCardlessPayment(invoice.id);
+    
+    // 5. Valider la facture (passer de brouillon à émise)
     await sellsyRequest('post', `/invoices/${invoice.id}/validate`, {
       date: today.toISOString().split('T')[0]
     });
