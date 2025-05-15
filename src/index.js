@@ -2,7 +2,7 @@
 import dotenv from 'dotenv';
 import Airtable from 'airtable';
 import { generateInvoice } from './sellsy.js';
-import { isToday } from './utils.js';
+import { formatDate, calculateDueDate } from './utils.js';
 
 // Chargement des variables d'environnement
 dotenv.config();
@@ -115,21 +115,27 @@ async function getServicesForSubscription(abonnement) {
     return [];
   }
   
-  const serviceIds = servicesLies.map(service => service);
-
   // Récupérer les détails des services
   const services = [];
   
-  for (const serviceId of serviceIds) {
+  for (const serviceId of servicesLies) {
     try {
       const service = await serviceTable.find(serviceId);
       
-      // Vérifier si le service est actif
-      if (service.fields['Actif'] === 'Actif') {
-        services.push({
-          id: service.id,
-          fields: service.fields
-        });
+      // Vérifier si le service est actif et si c'est un abonnement
+      if (service.fields['Actif'] === 'Actif' && service.fields['Catégorie'] === 'Abonnement') {
+        // S'assurer que le service appartient bien au même client
+        const serviceClientId = service.fields['ID_Sellsy_abonné'] || '';
+        const abonnementClientId = abonnement.fields['ID_Sellsy_abonné'] || '';
+        
+        if (serviceClientId && abonnementClientId && serviceClientId === abonnementClientId) {
+          services.push({
+            id: service.id,
+            fields: service.fields
+          });
+        } else {
+          console.warn(`⚠️ Service ID ${serviceId}: ID client incohérent avec l'abonnement`);
+        }
       }
     } catch (error) {
       console.error(`❌ Erreur lors de la récupération du service ID ${serviceId}:`, error);
@@ -161,16 +167,20 @@ async function generateInvoicesForServices(abonnement, services) {
     
     // Générer la facture dans Sellsy
     try {
-      const invoice = await generateInvoice({
+      // Récupérer les informations du service
+      const serviceInfo = {
         clientId: idSellsyClient,
-        serviceId: service.fields['ID Sellsy'] || null,
+        serviceId: service.fields['ID Sellsy'],
         serviceName: service.fields['Nom du service'],
         price: service.fields['Prix HT'],
         taxRate: service.fields['Taux TVA'] || 20,
-        paymentMethod: 'gocardless'  // Méthode GoCardless comme demandé
-      });
+        paymentMethod: 'gocardless'  // Toujours utiliser GoCardless
+      };
       
-      console.log(`✅ Facture générée pour le service ID ${service.id}`);
+      // Générer la facture
+      const invoice = await generateInvoice(serviceInfo);
+      
+      console.log(`✅ Facture générée pour le service ${service.fields['Nom du service']} (ID: ${service.id})`);
       
       // Mettre à jour les occurrences restantes
       await updateServiceOccurrences(service.id);
