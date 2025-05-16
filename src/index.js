@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import Airtable from 'airtable';
-import { generateInvoice, checkSellsyConnection, verifyGoCardlessMandate } from './sellsy.js';
+import { generateInvoice, checkSellsyConnection } from './sellsy.js';
 import { formatDate, calculateDueDate, isToday } from './utils.js';
 
 dotenv.config();
@@ -42,15 +42,6 @@ async function main() {
       const services = await fetchServicesForAbonnement(abonnement);
       if (!services.length) {
         console.log(`ℹ️ Aucun service actif trouvé pour l'abonnement ${abonnement.id}`);
-        continue;
-      }
-
-      // Vérifier que le client a un mandat GoCardless valide avant de générer les factures
-      const clientSellsyId = abonnement.fields['ID_Sellsy_abonné'];
-      const mandate = await verifyGoCardlessMandate(clientSellsyId);
-      
-      if (!mandate) {
-        console.warn(`⚠️ Aucun mandat GoCardless actif trouvé pour le client ID ${clientSellsyId}. Les factures ne seront pas générées.`);
         continue;
       }
 
