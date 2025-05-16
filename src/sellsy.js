@@ -225,75 +225,71 @@ export async function findDefaultGoCardlessMandate(clientId) {
 }
 
 /**
- * Récupère la prochaine date de prélèvement possible pour GoCardless
- * @returns {Promise<string>} - La prochaine date de prélèvement au format YYYY-MM-DD
+ * Calcule une date à X jours ouvrables dans le futur
+ * @param {number} workingDays - Nombre de jours ouvrables à ajouter (minimum 2)
+ * @returns {string} - Date au format YYYY-MM-DD
  */
-export async function getNextPossibleDirectDebitDate() {
-  try {
-    console.log(`🔍 Récupération de la prochaine date de prélèvement possible...`);
+function getScheduledDate(workingDays = 5) {
+  const date = new Date();
+  let daysAdded = 0;
+  
+  // Force au minimum 2 jours ouvrés comme recommandé par Sellsy
+  workingDays = Math.max(2, workingDays);
+  
+  while (daysAdded < workingDays) {
+    date.setDate(date.getDate() + 1);
     
-    // Requête pour obtenir les informations sur les dates de prélèvement GoCardless
-    // Cet endpoint est une supposition - à ajuster selon l'API réelle de Sellsy
-    const response = await sellsyRequest('get', '/directdebits/next-possible-date');
-    
-    if (!response || !response.date) {
-      // Si l'API ne fournit pas cette information, calculer une date par défaut (J+5)
-      console.warn(`⚠️ Impossible d'obtenir la date de prélèvement depuis l'API, calcul d'une date par défaut`);
-      const defaultDate = new Date();
-      defaultDate.setDate(defaultDate.getDate() + 5); // J+5 par défaut
-      return defaultDate.toISOString().split('T')[0]; // Format YYYY-MM-DD
+    // Skip weekends (0 = Sunday, 6 = Saturday)
+    const dayOfWeek = date.getDay();
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+      daysAdded++;
     }
-    
-    console.log(`✅ Prochaine date de prélèvement possible: ${response.date}`);
-    return response.date;
-  } catch (error) {
-    console.error(`❌ Erreur lors de la récupération de la date de prélèvement:`, error.message);
-    
-    // En cas d'erreur, retourner une date par défaut (J+5)
-    const defaultDate = new Date();
-    defaultDate.setDate(defaultDate.getDate() + 5);
-    return defaultDate.toISOString().split('T')[0];
   }
+  
+  // Format YYYY-MM-DD
+  return date.toISOString().split('T')[0];
 }
 
 /**
- * Programme un prélèvement GoCardless pour une facture à une date spécifique
+ * Crée un paiement programmé pour une facture avec GoCardless
  * @param {string|number} invoiceId - L'ID de la facture
  * @param {object} mandate - L'objet mandat GoCardless
- * @param {string} debitDate - La date de prélèvement au format YYYY-MM-DD
- * @returns {Promise<Object>} - Le paiement programmé
+ * @returns {Promise<Object>} - Le paiement créé
  */
-export async function scheduleDirectDebitPayment(invoiceId, mandate, debitDate) {
+export async function createScheduledDirectDebitPayment(invoiceId, mandate) {
   try {
-    console.log(`🔄 Programmation d'un prélèvement pour la facture ${invoiceId} avec le mandat ${mandate.id} à la date ${debitDate}...`);
+    // Date de prélèvement programmée à J+5 jours ouvrés
+    const scheduledDate = getScheduledDate(5);
     
-    // Données pour la programmation du prélèvement
+    console.log(`🔄 Création d'un paiement programmé pour la facture ${invoiceId} avec le mandat ${mandate.id} à la date ${scheduledDate}...`);
+    
+    // Selon la documentation de l'API Sellsy v2, l'endpoint correct est /payments
     const paymentData = {
-      document: {
-        id: parseInt(invoiceId),
-        type: "invoice"
-      },
-      date: debitDate,  // Date de prélèvement programmée
+      date: scheduledDate,  // Date programmée à J+5 jours ouvrés
       type: "directdebit",
-      amount: "full",  // Montant total de la facture
+      related: [
+        {
+          id: parseInt(invoiceId),
+          type: "invoice"
+        }
+      ],
       mandate: {
         id: mandate.id
       },
-      note: 'Prélèvement automatique GoCardless programmé',
-      status: "pending" // Statut en attente pour un prélèvement programmé
+      note: `Prélèvement automatique GoCardless programmé pour le ${scheduledDate}`
     };
     
-    console.log(`💰 Données de programmation de paiement:`, JSON.stringify(paymentData, null, 2));
+    console.log(`💰 Données de paiement:`, JSON.stringify(paymentData, null, 2));
     
-    // Créer le paiement programmé via l'API Sellsy
-    const payment = await sellsyRequest('post', `/payments`, paymentData);
+    // Créer le paiement via l'API Sellsy avec le bon endpoint
+    const payment = await sellsyRequest('post', '/payments', paymentData);
     
-    console.log(`✅ Prélèvement programmé avec succès pour la facture ${invoiceId} à la date ${debitDate}`);
+    console.log(`✅ Paiement programmé avec succès pour la facture ${invoiceId} pour le ${scheduledDate}`);
     console.log(`📊 Détails du paiement: ID=${payment.id || 'Non défini'}, Statut=${payment.status || 'Non défini'}`);
     
     return payment;
   } catch (error) {
-    console.error(`❌ Erreur lors de la programmation du prélèvement pour la facture ${invoiceId}:`, error.message);
+    console.error(`❌ Erreur lors de la création du paiement pour la facture ${invoiceId}:`, error.message);
     if (error.response) {
       console.error("Détails de l'erreur:", error.response.data);
     }
@@ -302,14 +298,14 @@ export async function scheduleDirectDebitPayment(invoiceId, mandate, debitDate) 
 }
 
 /**
- * Programme le prélèvement d'une facture avec GoCardless à la prochaine date disponible
+ * Traite le paiement d'une facture avec GoCardless
  * @param {string|number} invoiceId - L'ID de la facture
  * @param {string|number} clientId - L'ID du client
  * @returns {Promise<Object>} - Résultat du traitement
  */
-export async function scheduleInvoiceWithGoCardless(invoiceId, clientId) {
+export async function processInvoiceWithGoCardless(invoiceId, clientId) {
   try {
-    console.log(`🔄 Programmation du prélèvement pour la facture ${invoiceId} avec GoCardless pour le client ${clientId}...`);
+    console.log(`🔄 Programmation du prélèvement GoCardless pour la facture ${invoiceId} (client ${clientId})...`);
     
     // 1. Vérifier si le client a un mandat GoCardless actif
     const mandate = await findDefaultGoCardlessMandate(clientId);
@@ -318,18 +314,12 @@ export async function scheduleInvoiceWithGoCardless(invoiceId, clientId) {
       throw new Error(`Aucun mandat GoCardless actif trouvé pour le client ID ${clientId}`);
     }
     
-    // 2. Récupérer la prochaine date de prélèvement possible
-    const nextDebitDate = await getNextPossibleDirectDebitDate();
+    // 2. Créer le paiement programmé avec le mandat
+    const payment = await createScheduledDirectDebitPayment(invoiceId, mandate);
     
-    // 3. Programmer le prélèvement à cette date
-    const payment = await scheduleDirectDebitPayment(invoiceId, mandate, nextDebitDate);
-    
-    return {
-      payment,
-      debitDate: nextDebitDate
-    };
+    return payment;
   } catch (error) {
-    console.error(`❌ Erreur lors de la programmation du prélèvement pour la facture ${invoiceId}:`, error.message);
+    console.error(`❌ Erreur lors du traitement de la facture ${invoiceId} avec GoCardless:`, error.message);
     throw error;
   }
 }
@@ -409,7 +399,7 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
         }
       ],
       
-      note: "Facture prélevée automatiquement par prélèvement SEPA à la prochaine date disponible. Aucune action requise de votre part.",
+      note: "Facture prélevée automatiquement par prélèvement SEPA dans les 5 jours ouvrés. Aucune action requise de votre part.",
       
       // Ajout de la méthode de paiement si disponible
       ...(paymentMethodId ? { payment_method_ids: [paymentMethodId] } : {}),
@@ -441,10 +431,10 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       await sellsyRequest('post', `/invoices/${invoice.id}/validate`, { date: formattedDate });
       console.log(`✅ Facture ${invoice.id} validée avec succès`);
       
-      // MODIFICATION : Programmer le prélèvement à la prochaine date disponible
+      // Programmation du prélèvement GoCardless à J+5 jours ouvrés
       try {
-        const scheduledPayment = await scheduleInvoiceWithGoCardless(invoice.id, numericClientId);
-        console.log(`💶 Prélèvement GoCardless programmé pour la facture ${invoice.id} à la date ${scheduledPayment.debitDate}`);
+        await processInvoiceWithGoCardless(invoice.id, numericClientId);
+        console.log(`💶 Prélèvement GoCardless programmé pour la facture ${invoice.id}`);
       } catch (paymentError) {
         console.warn(`⚠️ Impossible de programmer le prélèvement GoCardless: ${paymentError.message}`);
         console.log(`⚠️ La facture a été créée et validée mais le prélèvement devra être programmé manuellement.`);
