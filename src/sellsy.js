@@ -435,6 +435,27 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
     // Validation de la facture (obligatoire avant de pouvoir la payer)
     try {
       await sellsyRequest('post', `/invoices/${invoice.id}/validate`, { date: formattedDate });
+      if (mandate) {
+  const payment = await sellsyRequest('post', '/payments', {
+    type: "directdebit",
+    related: [
+      {
+        id: invoice.id,
+        type: "invoice"
+      }
+    ],
+    mandate: {
+      id: mandate.id
+    },
+    note: "Prélèvement SEPA immédiat via GoCardless"
+    // NE PAS inclure "date" pour un paiement immédiat
+  });
+
+  console.log(`✅ Prélèvement GoCardless immédiat lancé pour la facture ${invoice.id} (paiement ID ${payment.id})`);
+} else {
+  console.warn(`⚠️ Aucun mandat GoCardless, aucun prélèvement immédiat n'a été lancé.`);
+}
+
       console.log(`✅ Facture ${invoice.id} validée avec succès`);
       
       // Si le mandat existe, ajouter le paiement direct en utilisant le mandat GoCardless
