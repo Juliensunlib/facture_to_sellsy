@@ -198,7 +198,7 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       related: [
         {
           id: numericClientId,
-          type: "client"  // "client" et non "clients"
+          type: "individual"  // "client" et non "clients"
         }
       ],
       
