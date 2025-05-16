@@ -109,7 +109,7 @@ async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
       }
     }
     // Réessayer pour les autres erreurs (sauf 400 Bad Request)
-    if (retryCount < MAX_RETRIES - 1 && error.code !== 'ERR_BAD_REQUEST') {
+    if (retryCount < MAX_RETRIES - 1 && error.response?.status !== 400) {
       await new Promise(resolve => setTimeout(resolve, 2000));
       return sellsyRequest(method, endpoint, data, retryCount + 1);
     }
@@ -184,35 +184,38 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
     const numericPrice = parseFloat(price);
     const numericTaxRate = parseFloat(taxRate);
     const numericClientId = parseInt(clientId);
+    const numericServiceId = parseInt(serviceId);
     
     console.log(`📊 Prix: ${numericPrice}, Taux TVA: ${numericTaxRate}%, Client ID: ${numericClientId}`);
     
     // Création de l'objet facture selon la documentation de l'API Sellsy V2
+    // Format corrigé pour correspondre aux attentes de l'API
     const invoiceData = {
       date: formattedDate,
       due_date: formattedDate,
       subject: `Abonnement mensuel - ${serviceName}`,
       currency: 'EUR',
       
-      // Format correct pour l'objet "related" selon la documentation
-      related: [
-        {
-          id: numericClientId,
-          type: "individual"  // "client" et non "clients"
-        }
-      ],
+      related: {
+        type: "individual",
+        id: numericClientId
+      },
       
       // Ajout de la méthode de paiement si disponible
       ...(paymentMethodId ? { payment_method_ids: [paymentMethodId] } : {}),
       
       note: "Facture prélevée automatiquement par prélèvement SEPA à réception. Aucune action requise de votre part.",
       
-      // Format correct pour les lignes selon la documentation
+      // Format corrigé des lignes selon l'erreur retournée
       rows: [
         {
-          type: "service",
+          row_type: "service",  // Changé de "type" à "row_type"
+          related: {
+            id: numericServiceId,
+            type: "service"
+          },
           name: serviceName,
-          qty: 1,
+          quantity: 1,          // Changé de "qty" à "quantity"
           unit_price: numericPrice,
           tax_rate: numericTaxRate,
           unit: "unité"
