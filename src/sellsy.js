@@ -305,7 +305,7 @@ export async function generateInvoice({
       subject: `Abonnement mensuel - ${serviceName}`,
       related: {
         id: numericClientId,
-        type: "company"
+        type: "companies"
       },
       payment_method_id: paymentMethodId,
       note: "Facture prélevée automatiquement par prélèvement SEPA à réception. Aucune action requise de votre part.",
