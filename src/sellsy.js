@@ -150,6 +150,39 @@ export async function findPaymentMethodByName(nameToFind) {
 }
 
 /**
+ * Recherche un mode de paiement en ligne par son nom
+ * @param {string} nameToFind - Le nom du mode de paiement en ligne (ex: 'gocardless')
+ * @returns {Promise<object|null>} - Les détails du mode de paiement ou null si non trouvé
+ */
+export async function findOnlinePaymentMode(nameToFind) {
+  try {
+    console.log(`🔍 Recherche du mode de paiement en ligne "${nameToFind}"...`);
+    const response = await sellsyRequest('get', '/payments/onlinemodes');
+    
+    if (!response || !response.data) {
+      throw new Error("Aucun mode de paiement en ligne trouvé dans la réponse");
+    }
+    
+    const mode = response.data.find(m => 
+      (m.gateway && m.gateway.toLowerCase() === nameToFind.toLowerCase()) ||
+      (m.name && m.name.toLowerCase().includes(nameToFind.toLowerCase()))
+    );
+    
+    if (!mode) {
+      console.warn(`⚠️ Mode de paiement "${nameToFind}" non trouvé. Modes disponibles:`, 
+        response.data.map(m => `${m.name} (${m.gateway})`).join(', '));
+      return null;
+    }
+    
+    console.log(`✅ Mode de paiement en ligne trouvé: ${mode.name} (ID: ${mode.id})`);
+    return mode;
+  } catch (error) {
+    console.error("❌ Erreur lors de la recherche du mode de paiement en ligne:", error);
+    return null;
+  }
+}
+
+/**
  * Récupère les détails d'un service depuis Sellsy
  * @param {string|number} serviceId - L'ID du service à récupérer
  * @returns {Promise<Object>} - Les détails du service
@@ -167,6 +200,47 @@ export async function getServiceDetails(serviceId) {
     return response;
   } catch (error) {
     console.error(`❌ Erreur lors de la récupération des détails du service ${serviceId}:`, error.message);
+    throw error;
+  }
+}
+
+/**
+ * Traite une facture avec GoCardless
+ * @param {string|number} invoiceId - L'ID de la facture à traiter
+ * @returns {Promise<Object>} - Résultat du traitement
+ */
+export async function processInvoiceWithGoCardless(invoiceId) {
+  try {
+    console.log(`🔄 Traitement de la facture ${invoiceId} avec GoCardless...`);
+    
+    // 1. Recherche du mode de paiement GoCardless
+    const goCardlessMode = await findOnlinePaymentMode('gocardless');
+    
+    if (!goCardlessMode) {
+      throw new Error('Mode de paiement GoCardless non disponible dans votre compte Sellsy');
+    }
+    
+    // 2. Préparer le paiement
+    const paymentData = {
+      amount: "full", // Payer le montant total de la facture
+      mode_id: goCardlessMode.id, // ID du mode de paiement GoCardless
+      type: "directdebit" // Type de paiement (prélèvement direct)
+    };
+    
+    console.log(`💰 Préparation du paiement avec GoCardless (ID: ${goCardlessMode.id})...`);
+    
+    // 3. Créer le paiement en utilisant l'endpoint approprié
+    const payment = await sellsyRequest('post', `/invoices/${invoiceId}/payments`, paymentData);
+    
+    console.log(`✅ Paiement initié avec succès pour la facture ${invoiceId}`);
+    console.log(`📊 Détails du paiement: ID=${payment.id}, Statut=${payment.status}`);
+    
+    return payment;
+  } catch (error) {
+    console.error(`❌ Erreur lors du traitement de la facture ${invoiceId} avec GoCardless:`, error.message);
+    if (error.response) {
+      console.error("Détails de l'erreur:", error.response.data);
+    }
     throw error;
   }
 }
@@ -251,10 +325,20 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
     const invoice = await sellsyRequest('post', '/invoices', invoiceData);
     console.log(`✅ Facture créée avec ID: ${invoice.id}`);
     
-    // Validation de la facture (si nécessaire)
+    // Validation de la facture (obligatoire avant de pouvoir la payer)
     try {
       await sellsyRequest('post', `/invoices/${invoice.id}/validate`, { date: formattedDate });
       console.log(`✅ Facture ${invoice.id} validée avec succès`);
+      
+      // Traitement du paiement avec GoCardless après validation
+      try {
+        await processInvoiceWithGoCardless(invoice.id);
+        console.log(`💶 Prélèvement GoCardless initié pour la facture ${invoice.id}`);
+      } catch (paymentError) {
+        console.warn(`⚠️ Impossible d'initier le prélèvement GoCardless: ${paymentError.message}`);
+        console.log(`⚠️ La facture a été créée et validée mais le prélèvement devra être déclenché manuellement.`);
+      }
+      
     } catch (validationError) {
       console.warn(`⚠️ Impossible de valider la facture: ${validationError.message}`);
       console.log(`⚠️ La facture a été créée mais n'a pas pu être validée automatiquement.`);
