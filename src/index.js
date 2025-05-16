@@ -49,7 +49,7 @@ async function main() {
     // Vérifier la connexion à l'API Sellsy
     const sellsyConnected = await checkSellsyConnection();
     if (!sellsyConnected) {
-      throw new Error('Impossible d'établir une connexion avec l\'API Sellsy. Vérifiez vos identifiants.');
+      throw new Error("Impossible d'établir une connexion avec l'API Sellsy. Vérifiez vos identifiants.");
     }
 
     // 1. Récupérer tous les abonnements actifs
