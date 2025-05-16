@@ -150,6 +150,81 @@ export async function findPaymentMethodByName(nameToFind) {
 }
 
 /**
+ * Récupère les mandats GoCardless disponibles pour un client
+ * @param {string|number} clientId - L'ID du client Sellsy
+ * @returns {Promise<Array>} - Liste des mandats GoCardless
+ */
+export async function getClientGoCardlessMandates(clientId) {
+  try {
+    console.log(`🔍 Récupération des mandats GoCardless pour le client ID ${clientId}...`);
+    
+    // Utiliser l'API des mandats avec un filtre sur le client
+    const filters = {
+      related: [
+        {
+          id: parseInt(clientId),
+          type: "individual"  // Ou "company" selon votre cas
+        }
+      ]
+    };
+    
+    const response = await sellsyRequest('post', '/mandates/search', { filters });
+    
+    if (!response || !response.data) {
+      console.warn(`⚠️ Aucun mandat trouvé pour le client ID ${clientId}`);
+      return [];
+    }
+    
+    console.log(`✅ ${response.data.length} mandat(s) GoCardless trouvé(s) pour le client ID ${clientId}`);
+    return response.data;
+  } catch (error) {
+    console.error(`❌ Erreur lors de la récupération des mandats GoCardless pour le client ID ${clientId}:`, error.message);
+    return [];
+  }
+}
+
+/**
+ * Recherche le mandat GoCardless actif par défaut pour un client
+ * @param {string|number} clientId - L'ID du client Sellsy
+ * @returns {Promise<Object|null>} - Le mandat GoCardless par défaut ou null si non trouvé
+ */
+export async function findDefaultGoCardlessMandate(clientId) {
+  try {
+    const mandates = await getClientGoCardlessMandates(clientId);
+    
+    if (!mandates.length) {
+      return null;
+    }
+    
+    // Rechercher d'abord un mandat par défaut actif
+    let mandate = mandates.find(m => 
+      m.is_default === true && 
+      m.status && 
+      m.status.toLowerCase() === 'active'
+    );
+    
+    // Si aucun mandat par défaut, prendre le premier mandat actif
+    if (!mandate) {
+      mandate = mandates.find(m => 
+        m.status && 
+        m.status.toLowerCase() === 'active'
+      );
+    }
+    
+    if (!mandate) {
+      console.warn(`⚠️ Aucun mandat GoCardless actif trouvé pour le client ID ${clientId}`);
+      return null;
+    }
+    
+    console.log(`✅ Mandat GoCardless actif trouvé: ID=${mandate.id}, Référence=${mandate.reference || 'Non définie'}`);
+    return mandate;
+  } catch (error) {
+    console.error(`❌ Erreur lors de la recherche du mandat GoCardless pour le client ID ${clientId}:`, error.message);
+    return null;
+  }
+}
+
+/**
  * Recherche les modes de paiement disponibles pour une facture
  * @param {string|number} invoiceId - L'ID de la facture
  * @returns {Promise<Array>} - Liste des modes de paiement disponibles
@@ -224,25 +299,34 @@ export async function getServiceDetails(serviceId) {
 }
 
 /**
- * Traite une facture avec GoCardless
- * @param {string|number} invoiceId - L'ID de la facture à traiter
+ * Vérifie si un client a un mandat GoCardless actif et initie un prélèvement
+ * @param {string|number} invoiceId - L'ID de la facture
+ * @param {string|number} clientId - L'ID du client
  * @returns {Promise<Object>} - Résultat du traitement
  */
-export async function processInvoiceWithGoCardless(invoiceId) {
+export async function processInvoiceWithGoCardless(invoiceId, clientId) {
   try {
-    console.log(`🔄 Traitement de la facture ${invoiceId} avec GoCardless...`);
+    console.log(`🔄 Traitement de la facture ${invoiceId} avec GoCardless pour le client ${clientId}...`);
     
-    // 1. Récupérer les modes de paiement disponibles pour cette facture
+    // 1. Vérifier si le client a un mandat GoCardless actif
+    const mandate = await findDefaultGoCardlessMandate(clientId);
+    
+    if (!mandate) {
+      throw new Error(`Aucun mandat GoCardless actif trouvé pour le client ID ${clientId}`);
+    }
+    
+    // 2. Récupérer les modes de paiement disponibles pour cette facture
     const goCardlessMode = await findGoCardlessPaymentMode(invoiceId);
     
     if (!goCardlessMode) {
       throw new Error('Mode de paiement GoCardless non disponible pour cette facture');
     }
     
-    // 2. Préparer le paiement
+    // 3. Préparer le paiement
     const paymentData = {
       amount: "full",  // Payer le montant total de la facture
-      mode_id: goCardlessMode.id
+      mode_id: goCardlessMode.id,
+      mandate_id: mandate.id  // Ajouter l'ID du mandat GoCardless
     };
     
     // Si l'API exige un type spécifique, nous l'ajoutons
@@ -250,10 +334,10 @@ export async function processInvoiceWithGoCardless(invoiceId) {
       paymentData.type = goCardlessMode.type;
     }
     
-    console.log(`💰 Préparation du paiement avec GoCardless (ID: ${goCardlessMode.id})...`);
+    console.log(`💰 Préparation du paiement avec GoCardless (Mode ID: ${goCardlessMode.id}, Mandat ID: ${mandate.id})...`);
     console.log(`Données de paiement:`, JSON.stringify(paymentData, null, 2));
     
-    // 3. Créer le paiement
+    // 4. Créer le paiement
     const payment = await sellsyRequest('post', `/invoices/${invoiceId}/payments`, paymentData);
     
     console.log(`✅ Paiement initié avec succès pour la facture ${invoiceId}`);
@@ -356,7 +440,7 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       
       // Traitement du paiement avec GoCardless après validation
       try {
-        await processInvoiceWithGoCardless(invoice.id);
+        await processInvoiceWithGoCardless(invoice.id, numericClientId);
         console.log(`💶 Prélèvement GoCardless initié pour la facture ${invoice.id}`);
       } catch (paymentError) {
         console.warn(`⚠️ Impossible d'initier le prélèvement GoCardless: ${paymentError.message}`);
