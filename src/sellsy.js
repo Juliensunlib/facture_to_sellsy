@@ -210,16 +210,15 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       
       rows: [
         {
-          // Correction: utilisation de 'type' au lieu de 'row_type'
-          type: "service",
+          // Correction: utiliser 'catalog' au lieu de 'service' selon la doc Sellsy
+          type: "catalog",
           related: {
             id: numericServiceId,
-            type: "service"
+            type: "service"  // On garde service ici car c'est le type de l'élément relié
           },
           name: serviceName,
           quantity: 1,
-          // Correction: utilisation de 'unit_amount' au lieu de 'unit_price'
-          unit_amount: numericPrice,
+          unit_amount: numericPrice.toString(),  // Convertir en string comme indiqué dans la doc
           tax_rate: numericTaxRate,
           unit: "unité"
         }
