@@ -213,8 +213,8 @@ export async function checkSellsyConnection() {
     if (!token) return false;
     
     // Test d'une requête simple pour vérifier la connexion
-    // Modification: utiliser un endpoint disponible dans l'API V2
-    const response = await sellsyRequest('get', '/companies/me');
+    // Utiliser un endpoint disponible dans l'API V2
+    const response = await sellsyRequest('get', '/account/info');
     
     if (response) {
       console.log('✅ Connexion API Sellsy OK');
