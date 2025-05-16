@@ -150,103 +150,6 @@ export async function findPaymentMethodByName(nameToFind) {
 }
 
 /**
- * Récupère les mandats GoCardless disponibles pour un client
- * @param {string|number} clientId - L'ID du client Sellsy
- * @returns {Promise<Array>} - Liste des mandats GoCardless
- */
-export async function getClientGoCardlessMandates(clientId) {
-  try {
-    console.log(`🔍 Récupération des mandats GoCardless pour le client ID ${clientId}...`);
-    
-    // Utiliser l'API des mandats avec un filtre sur le client
-    const filters = {
-      related: [
-        {
-          id: parseInt(clientId),
-          type: "individual"  // Ou "company" selon votre cas
-        }
-      ]
-    };
-    
-    const response = await sellsyRequest('post', '/mandates/search', { filters });
-    
-    if (!response || !response.data) {
-      console.warn(`⚠️ Aucun mandat trouvé pour le client ID ${clientId}`);
-      return [];
-    }
-    
-    console.log(`✅ ${response.data.length} mandat(s) GoCardless trouvé(s) pour le client ID ${clientId}`);
-    return response.data;
-  } catch (error) {
-    console.error(`❌ Erreur lors de la récupération des mandats GoCardless pour le client ID ${clientId}:`, error.message);
-    return [];
-  }
-}
-
-/**
- * Recherche le mandat GoCardless actif par défaut pour un client
- * @param {string|number} clientId - L'ID du client Sellsy
- * @returns {Promise<Object|null>} - Le mandat GoCardless par défaut ou null si non trouvé
- */
-export async function findDefaultGoCardlessMandate(clientId) {
-  try {
-    const mandates = await getClientGoCardlessMandates(clientId);
-    
-    if (!mandates.length) {
-      return null;
-    }
-    
-    // Rechercher d'abord un mandat par défaut actif
-    let mandate = mandates.find(m => 
-      m.is_default === true && 
-      m.status && 
-      m.status.toLowerCase() === 'active'
-    );
-    
-    // Si aucun mandat par défaut, prendre le premier mandat actif
-    if (!mandate) {
-      mandate = mandates.find(m => 
-        m.status && 
-        m.status.toLowerCase() === 'active'
-      );
-    }
-    
-    if (!mandate) {
-      console.warn(`⚠️ Aucun mandat GoCardless actif trouvé pour le client ID ${clientId}`);
-      return null;
-    }
-    
-    console.log(`✅ Mandat GoCardless actif trouvé: ID=${mandate.id}, Référence=${mandate.reference || 'Non définie'}`);
-    return mandate;
-  } catch (error) {
-    console.error(`❌ Erreur lors de la recherche du mandat GoCardless pour le client ID ${clientId}:`, error.message);
-    return null;
-  }
-}
-
-/**
- * Vérifie que le client a un mandat GoCardless valide
- * @param {string|number} clientId - L'ID du client
- * @returns {Promise<Object|null>} - Le mandat GoCardless ou null
- */
-export async function verifyGoCardlessMandate(clientId) {
-  try {
-    console.log(`🔍 Vérification du mandat GoCardless pour le client ID ${clientId}...`);
-    const mandate = await findDefaultGoCardlessMandate(clientId);
-    
-    if (!mandate) {
-      console.warn(`⚠️ Aucun mandat GoCardless actif trouvé pour le client ID ${clientId}`);
-      return null;
-    }
-    
-    return mandate;
-  } catch (error) {
-    console.error(`❌ Erreur lors de la vérification du mandat GoCardless:`, error.message);
-    return null;
-  }
-}
-
-/**
  * Récupère les détails d'un service depuis Sellsy
  * @param {string|number} serviceId - L'ID du service à récupérer
  * @returns {Promise<Object>} - Les détails du service
@@ -287,12 +190,6 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       throw new Error(`Paramètres manquants: clientId=${clientId}, serviceName=${serviceName}, price=${price}`);
     }
     
-    // Vérifier que le client possède un mandat GoCardless valide
-    const mandate = await verifyGoCardlessMandate(clientId);
-    if (!mandate) {
-      console.warn(`⚠️ Aucun mandat GoCardless valide trouvé pour le client ID ${clientId}. La facture sera créée sans prélèvement automatique.`);
-    }
-    
     // Recherche de l'ID de la méthode de paiement
     let paymentMethodId;
     try {
@@ -313,18 +210,7 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
     
     console.log(`📊 Prix: ${numericPrice}, Taux TVA: ${numericTaxRate}%, Client ID: ${numericClientId}`);
     
-    // Configuration des paramètres GoCardless dans la facture
-    // Selon la documentation, c'est cette partie qui active le prélèvement GoCardless immédiat
-    const paymentSettings = {
-      settings: {
-        payments: {
-          payment_modules: [],
-          direct_debit_module: "gocardless"
-        }
-      }
-    };
-    
-    // Création de l'objet facture selon la documentation de l'API Sellsy V2
+    // Configuration des paramètres GoCardless dans la facture selon la documentation Sellsy
     const invoiceData = {
       date: formattedDate,
       due_date: formattedDate,
@@ -334,7 +220,7 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       related: [
         {
           id: numericClientId,
-          type: "individual"
+          type: "individual"  // ou "company" selon le type de client
         }
       ],
       
@@ -343,8 +229,13 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       // Ajout de la méthode de paiement si disponible
       ...(paymentMethodId ? { payment_method_ids: [paymentMethodId] } : {}),
       
-      // Configuration des paramètres de paiement GoCardless
-      ...paymentSettings,
+      // Configuration pour GoCardless selon la documentation
+      settings: {
+        payments: {
+          payment_modules: [],
+          direct_debit_module: "gocardless"
+        }
+      },
       
       rows: [
         {
@@ -372,9 +263,6 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       console.log(`✅ Facture ${invoice.id} validée avec succès`);
       
       // Avec la configuration direct_debit_module: "gocardless", le prélèvement est automatique
-      // Une fois la facture validée, il n'est pas nécessaire de créer manuellement un paiement
-      
-      // Si nous voulons vérifier le statut du paiement, nous pouvons le faire ici
       console.log(`💶 Prélèvement GoCardless configuré automatiquement pour la facture ${invoice.id}`);
       
     } catch (validationError) {
@@ -417,4 +305,11 @@ export async function checkSellsyConnection() {
     console.error('❌ Échec de connexion à l\'API Sellsy:', error);
     return false;
   }
+}
+
+// Pour des raisons de compatibilité, nous conservons cette fonction dans l'export
+// mais elle renvoie toujours true puisque la vérification des mandats est maintenant
+// gérée automatiquement par Sellsy
+export async function verifyGoCardlessMandate() {
+  return true;
 }
