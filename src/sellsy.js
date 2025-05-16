@@ -298,29 +298,24 @@ export async function createScheduledDirectDebitPayment(invoiceId, mandate) {
 }
 
 /**
- * Traite le paiement d'une facture avec GoCardless
- * @param {string|number} invoiceId - L'ID de la facture
+ * Vérifie que le client a un mandat GoCardless valide
  * @param {string|number} clientId - L'ID du client
- * @returns {Promise<Object>} - Résultat du traitement
+ * @returns {Promise<Object|null>} - Le mandat GoCardless ou null
  */
-export async function processInvoiceWithGoCardless(invoiceId, clientId) {
+export async function verifyGoCardlessMandate(clientId) {
   try {
-    console.log(`🔄 Programmation du prélèvement GoCardless pour la facture ${invoiceId} (client ${clientId})...`);
-    
-    // 1. Vérifier si le client a un mandat GoCardless actif
+    console.log(`🔍 Vérification du mandat GoCardless pour le client ID ${clientId}...`);
     const mandate = await findDefaultGoCardlessMandate(clientId);
     
     if (!mandate) {
-      throw new Error(`Aucun mandat GoCardless actif trouvé pour le client ID ${clientId}`);
+      console.warn(`⚠️ Aucun mandat GoCardless actif trouvé pour le client ID ${clientId}`);
+      return null;
     }
     
-    // 2. Créer le paiement programmé avec le mandat
-    const payment = await createScheduledDirectDebitPayment(invoiceId, mandate);
-    
-    return payment;
+    return mandate;
   } catch (error) {
-    console.error(`❌ Erreur lors du traitement de la facture ${invoiceId} avec GoCardless:`, error.message);
-    throw error;
+    console.error(`❌ Erreur lors de la vérification du mandat GoCardless:`, error.message);
+    return null;
   }
 }
 
@@ -347,7 +342,7 @@ export async function getServiceDetails(serviceId) {
 }
 
 /**
- * Génère une facture dans Sellsy
+ * Génère une facture dans Sellsy avec configuration GoCardless
  * @param {Object} options - Les options pour la création de facture
  * @param {string|number} options.clientId - L'ID client Sellsy
  * @param {string|number} options.serviceId - L'ID service Sellsy
@@ -363,6 +358,12 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
     
     if (!clientId || !serviceName || !price) {
       throw new Error(`Paramètres manquants: clientId=${clientId}, serviceName=${serviceName}, price=${price}`);
+    }
+    
+    // Vérifier que le client possède un mandat GoCardless valide
+    const mandate = await verifyGoCardlessMandate(clientId);
+    if (!mandate) {
+      console.warn(`⚠️ Aucun mandat GoCardless valide trouvé pour le client ID ${clientId}. La facture sera créée sans prélèvement automatique.`);
     }
     
     // Recherche de l'ID de la méthode de paiement
@@ -404,6 +405,11 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       // Ajout de la méthode de paiement si disponible
       ...(paymentMethodId ? { payment_method_ids: [paymentMethodId] } : {}),
       
+      // Configuration des modules de paiement - AJOUT POUR RÉSOUDRE LE PROBLÈME
+      payments: {
+        direct_debit_module: "gocardless"
+      },
+      
       rows: [
         {
           // Utiliser "catalog" comme type selon la documentation Sellsy V2
@@ -431,15 +437,32 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       await sellsyRequest('post', `/invoices/${invoice.id}/validate`, { date: formattedDate });
       console.log(`✅ Facture ${invoice.id} validée avec succès`);
       
-      // Programmation du prélèvement GoCardless à J+5 jours ouvrés
-      try {
-        await processInvoiceWithGoCardless(invoice.id, numericClientId);
-        console.log(`💶 Prélèvement GoCardless programmé pour la facture ${invoice.id}`);
-      } catch (paymentError) {
-        console.warn(`⚠️ Impossible de programmer le prélèvement GoCardless: ${paymentError.message}`);
-        console.log(`⚠️ La facture a été créée et validée mais le prélèvement devra être programmé manuellement.`);
+      // Si le mandat existe, ajouter le paiement direct en utilisant le mandat GoCardless
+      if (mandate) {
+        try {
+          // Créer directement le paiement avec le mandat GoCardless
+          const paymentData = {
+            date: formattedDate,  // Date d'aujourd'hui pour traitement immédiat
+            type: "directdebit",
+            related: [
+              {
+                id: parseInt(invoice.id),
+                type: "invoice"
+              }
+            ],
+            mandate: {
+              id: mandate.id
+            },
+            note: "Prélèvement automatique GoCardless"
+          };
+          
+          const payment = await sellsyRequest('post', '/payments', paymentData);
+          console.log(`💶 Prélèvement GoCardless créé avec succès pour la facture ${invoice.id}, ID du paiement: ${payment.id}`);
+        } catch (paymentError) {
+          console.warn(`⚠️ Impossible de créer le prélèvement GoCardless: ${paymentError.message}`);
+          console.log(`⚠️ La facture a été créée et validée mais le prélèvement devra être effectué manuellement.`);
+        }
       }
-      
     } catch (validationError) {
       console.warn(`⚠️ Impossible de valider la facture: ${validationError.message}`);
       console.log(`⚠️ La facture a été créée mais n'a pas pu être validée automatiquement.`);
