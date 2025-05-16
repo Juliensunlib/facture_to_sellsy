@@ -106,15 +106,15 @@ function checkIfInvoiceNeeded(abonnement) {
 
 /**
  * Récupère les services liés à un abonnement
- * Version corrigée qui recherche par ID Sellsy
+ * Version corrigée qui tient compte des références Airtable
  */
 async function getServicesForSubscription(abonnement) {
-  // Récupérer les IDs Sellsy des services liés
-  const servicesIDs = abonnement.fields['Services liés'] || [];
+  // Récupérer les IDs Airtable des services liés
+  const serviceRecordIds = abonnement.fields['Services liés'] || [];
   
-  console.log(`🔍 Services liés pour l'abonnement ID ${abonnement.id}:`, servicesIDs);
+  console.log(`🔍 Services liés (IDs Airtable) pour l'abonnement ID ${abonnement.id}:`, serviceRecordIds);
   
-  if (!servicesIDs.length) {
+  if (!serviceRecordIds.length) {
     console.warn(`⚠️ Aucun ID de service trouvé pour l'abonnement ID ${abonnement.id}`);
     return [];
   }
@@ -127,50 +127,56 @@ async function getServicesForSubscription(abonnement) {
     return [];
   }
   
-  // Récupérer les services correspondant aux IDs Sellsy
-  return new Promise((resolve, reject) => {
-    const services = [];
-    
-    // Créer un tableau de promesses pour récupérer chaque service individuellement
-    const servicePromises = servicesIDs.map(idSellsy => {
-      return new Promise((resolveService, rejectService) => {
-        serviceTable.select({
-          filterByFormula: `AND({ID Sellsy} = '${idSellsy}', {ID_Sellsy_abonné} = '${idSellsyClient}', {Actif} = 'Actif', {Catégorie} = 'Abonnement')`,
-          maxRecords: 1,
-          view: "Grid view"
-        }).firstPage((err, records) => {
-          if (err) {
-            console.error(`❌ Erreur lors de la recherche du service ID Sellsy ${idSellsy}:`, err);
-            rejectService(err);
-            return;
-          }
-          
-          if (records && records.length > 0) {
-            console.log(`✅ Service trouvé: ${records[0].fields['Nom du service']} (ID Sellsy: ${idSellsy})`);
-            services.push({
-              id: records[0].id,
-              fields: records[0].fields
-            });
-          } else {
-            console.warn(`⚠️ Aucun service actif trouvé pour l'ID Sellsy ${idSellsy}`);
-          }
-          
-          resolveService();
-        });
+  // Récupérer les services directement par leur ID Airtable
+  const services = [];
+  
+  for (const recordId of serviceRecordIds) {
+    try {
+      // Récupérer le service directement par son ID Airtable
+      console.log(`🔍 Récupération du service avec ID Airtable: ${recordId}`);
+      const service = await serviceTable.find(recordId);
+      
+      console.log(`🔍 Service trouvé: ${service.fields['Nom du service'] || 'Sans nom'}`);
+      console.log(`   - Statut: ${service.fields['Actif'] || 'Non défini'}`);
+      console.log(`   - Catégorie: ${service.fields['Catégorie'] || 'Non définie'}`);
+      console.log(`   - ID Client Service: ${service.fields['ID_Sellsy_abonné'] || 'Non défini'}`);
+      console.log(`   - ID Client Abonnement: ${idSellsyClient}`);
+      
+      // Vérifier si le service est actif
+      if (service.fields['Actif'] !== 'Actif') {
+        console.warn(`⚠️ Service ${recordId}: n'est pas actif`);
+        continue;
+      }
+      
+      // Vérifier si c'est un abonnement
+      if (service.fields['Catégorie'] !== 'Abonnement') {
+        console.warn(`⚠️ Service ${recordId}: n'est pas de catégorie 'Abonnement' (${service.fields['Catégorie']})`);
+        continue;
+      }
+      
+      // Vérifier que le service appartient au même client
+      const serviceClientId = service.fields['ID_Sellsy_abonné'] || '';
+      
+      if (!serviceClientId || serviceClientId !== idSellsyClient) {
+        console.warn(`⚠️ Service ${recordId}: ID client incohérent avec l'abonnement`);
+        continue;
+      }
+      
+      // Service valide, l'ajouter à la liste
+      services.push({
+        id: service.id,
+        fields: service.fields
       });
-    });
-    
-    // Attendre que toutes les requêtes de service soient terminées
-    Promise.all(servicePromises)
-      .then(() => {
-        console.log(`✅ Total de ${services.length} services valides trouvés pour l'abonnement ID ${abonnement.id}`);
-        resolve(services);
-      })
-      .catch(error => {
-        console.error('❌ Erreur lors de la récupération des services:', error);
-        reject(error);
-      });
-  });
+      
+      console.log(`✅ Service valide ajouté: ${service.fields['Nom du service']}`);
+      
+    } catch (error) {
+      console.error(`❌ Erreur lors de la récupération du service ${recordId}:`, error);
+    }
+  }
+  
+  console.log(`✅ Total de ${services.length} services valides trouvés pour l'abonnement ID ${abonnement.id}`);
+  return services;
 }
 
 /**
