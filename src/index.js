@@ -1,7 +1,7 @@
 // Importation des modules nécessaires
 import dotenv from 'dotenv';
 import Airtable from 'airtable';
-import { generateInvoice } from './sellsy.js';
+import { generateInvoice, checkSellsyConnection } from './sellsy.js';
 import { formatDate, calculateDueDate } from './utils.js';
 
 // Chargement des variables d'environnement
@@ -17,12 +17,41 @@ const abonnementsTable = base('Abonnements');
 const serviceTable = base('service_sellsy');
 
 /**
+ * Vérifie la présence et la validité des variables d'environnement
+ */
+function checkEnvironmentVariables() {
+  const requiredVars = [
+    'AIRTABLE_API_KEY',
+    'AIRTABLE_BASE_ID',
+    'SELLSY_CLIENT_ID',
+    'SELLSY_CLIENT_SECRET'
+  ];
+  
+  const missingVars = requiredVars.filter(varName => !process.env[varName]);
+  
+  if (missingVars.length > 0) {
+    throw new Error(`Variables d'environnement manquantes: ${missingVars.join(', ')}`);
+  }
+  
+  console.log('✅ Variables d\'environnement vérifiées avec succès');
+}
+
+/**
  * Fonction principale qui s'exécute quotidiennement
  */
 async function main() {
   console.log('🚀 Démarrage de la vérification des factures à générer...');
 
   try {
+    // Vérifier les variables d'environnement
+    checkEnvironmentVariables();
+    
+    // Vérifier la connexion à l'API Sellsy
+    const sellsyConnected = await checkSellsyConnection();
+    if (!sellsyConnected) {
+      throw new Error('Impossible d'établir une connexion avec l\'API Sellsy. Vérifiez vos identifiants.');
+    }
+
     // 1. Récupérer tous les abonnements actifs
     const abonnements = await getActiveSubscriptions();
     console.log(`📋 ${abonnements.length} abonnements actifs trouvés`);
@@ -33,7 +62,12 @@ async function main() {
     for (const abonnement of abonnements) {
       const invoiceNeeded = checkIfInvoiceNeeded(abonnement);
       
-      if (!invoiceNeeded) continue;
+      if (!invoiceNeeded) {
+        console.log(`ℹ️ Abonnement ID ${abonnement.id}: Pas de facturation prévue aujourd'hui`);
+        continue;
+      }
+
+      console.log(`🔄 Traitement de l'abonnement ID ${abonnement.id}: ${abonnement.fields['Nom de l\'abonnement'] || 'Sans nom'}`);
 
       // 3. Si oui, générer la facture dans Sellsy
       const services = await getServicesForSubscription(abonnement);
@@ -50,6 +84,7 @@ async function main() {
     console.log(`✅ Traitement terminé. ${invoicesGenerated} factures générées.`);
   } catch (error) {
     console.error('❌ Erreur lors du traitement:', error);
+    process.exit(1); // Sortir avec un code d'erreur
   }
 }
 
@@ -58,6 +93,8 @@ async function main() {
  */
 async function getActiveSubscriptions() {
   return new Promise((resolve, reject) => {
+    console.log('🔄 Récupération des abonnements actifs...');
+    
     const abonnements = [];
     
     abonnementsTable.select({
@@ -75,6 +112,7 @@ async function getActiveSubscriptions() {
       },
       function done(err) {
         if (err) {
+          console.error('❌ Erreur lors de la récupération des abonnements:', err);
           reject(err);
         } else {
           resolve(abonnements);
@@ -101,7 +139,15 @@ function checkIfInvoiceNeeded(abonnement) {
   const currentDay = today.getDate();
   
   // Vérifier si c'est le jour de facturation
-  return currentDay === parseInt(jourFacturation);
+  const shouldInvoice = currentDay === parseInt(jourFacturation);
+  
+  if (shouldInvoice) {
+    console.log(`✅ Abonnement ID ${abonnement.id}: Jour de facturation (${jourFacturation}) correspond à aujourd'hui (${currentDay})`);
+  } else {
+    console.log(`ℹ️ Abonnement ID ${abonnement.id}: Jour de facturation (${jourFacturation}) ne correspond pas à aujourd'hui (${currentDay})`);
+  }
+  
+  return shouldInvoice;
 }
 
 /**
