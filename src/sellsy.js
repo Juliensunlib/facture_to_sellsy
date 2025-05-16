@@ -189,7 +189,6 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
     console.log(`📊 Prix: ${numericPrice}, Taux TVA: ${numericTaxRate}%, Client ID: ${numericClientId}`);
     
     // Création de l'objet facture selon la documentation de l'API Sellsy V2
-    // Correction de la structure pour correspondre aux attentes de l'API
     const invoiceData = {
       date: formattedDate,
       due_date: formattedDate,
@@ -210,17 +209,17 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       
       rows: [
         {
-          // Correction: utiliser 'catalog' au lieu de 'service' selon la doc Sellsy
+          // Utiliser "catalog" comme type selon la documentation Sellsy V2
           type: "catalog",
           related: {
             id: numericServiceId,
-            type: "service"  // On garde service ici car c'est le type de l'élément relié
+            type: "service"
           },
+          unit_amount: numericPrice.toString(), // Convertir en string comme demandé dans la doc
+          tax_rate: numericTaxRate.toString(), // Convertir en string
+          quantity: "1", // En string d'après la doc
           name: serviceName,
-          quantity: 1,
-          unit_amount: numericPrice.toString(),  // Convertir en string comme indiqué dans la doc
-          tax_rate: numericTaxRate,
-          unit: "unité"
+          description: `Abonnement mensuel - ${serviceName}`
         }
       ]
     };
