@@ -225,7 +225,7 @@ export async function findDefaultGoCardlessMandate(clientId) {
 }
 
 /**
- * Crée un paiement pour une facture avec GoCardless
+ * Crée un paiement pour une facture avec GoCardless en utilisant l'endpoint correct
  * @param {string|number} invoiceId - L'ID de la facture
  * @param {object} mandate - L'objet mandat GoCardless
  * @returns {Promise<Object>} - Le paiement créé
@@ -234,19 +234,27 @@ export async function createDirectDebitPayment(invoiceId, mandate) {
   try {
     console.log(`🔄 Création d'un paiement par prélèvement pour la facture ${invoiceId} avec le mandat ${mandate.id}...`);
     
-    // Selon la documentation Sellsy v2, le payload pour créer un paiement
+    // Selon la documentation Sellsy v2, utiliser le bon endpoint pour créer un paiement
+    // L'erreur 405 indique que l'endpoint /invoices/{id}/payments n'accepte pas POST
+    // Utiliser l'endpoint correct /payments au lieu de /invoices/{id}/payments
     const paymentData = {
-      type: 'directdebit',
-      amount: 'full',  // Montant total de la facture
+      document: {
+        id: parseInt(invoiceId),
+        type: "invoice"
+      },
       date: new Date().toISOString().split('T')[0],  // Date du jour au format YYYY-MM-DD
-      mandate_id: mandate.id,
+      type: "directdebit",
+      amount: "full",  // Montant total de la facture
+      mandate: {
+        id: mandate.id
+      },
       note: 'Prélèvement automatique GoCardless'
     };
     
     console.log(`💰 Données de paiement:`, JSON.stringify(paymentData, null, 2));
     
-    // Créer le paiement via l'API Sellsy
-    const payment = await sellsyRequest('post', `/invoices/${invoiceId}/payments`, paymentData);
+    // Créer le paiement via l'API Sellsy avec le bon endpoint
+    const payment = await sellsyRequest('post', `/payments`, paymentData);
     
     console.log(`✅ Paiement initié avec succès pour la facture ${invoiceId}`);
     console.log(`📊 Détails du paiement: ID=${payment.id || 'Non défini'}, Statut=${payment.status || 'Non défini'}`);
