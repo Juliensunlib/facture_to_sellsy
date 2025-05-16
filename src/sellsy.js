@@ -189,33 +189,34 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
     console.log(`📊 Prix: ${numericPrice}, Taux TVA: ${numericTaxRate}%, Client ID: ${numericClientId}`);
     
     // Création de l'objet facture selon la documentation de l'API Sellsy V2
-    // Format corrigé pour correspondre aux attentes de l'API
     const invoiceData = {
       date: formattedDate,
       due_date: formattedDate,
       subject: `Abonnement mensuel - ${serviceName}`,
-      currency: 'EUR',
+      currency: "EUR",
       
-      related: {
-        type: "individual",
-        id: numericClientId
-      },
+      // Modification majeure ici: related est un tableau
+      related: [
+        {
+          id: numericClientId,
+          type: "individual"
+        }
+      ],
+      
+      note: "Facture prélevée automatiquement par prélèvement SEPA à réception. Aucune action requise de votre part.",
       
       // Ajout de la méthode de paiement si disponible
       ...(paymentMethodId ? { payment_method_ids: [paymentMethodId] } : {}),
       
-      note: "Facture prélevée automatiquement par prélèvement SEPA à réception. Aucune action requise de votre part.",
-      
-      // Format corrigé des lignes selon l'erreur retournée
       rows: [
         {
-          row_type: "service",  // Changé de "type" à "row_type"
+          row_type: "service",
           related: {
             id: numericServiceId,
             type: "service"
           },
           name: serviceName,
-          quantity: 1,          // Changé de "qty" à "quantity"
+          quantity: 1,
           unit_price: numericPrice,
           tax_rate: numericTaxRate,
           unit: "unité"
