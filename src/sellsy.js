@@ -218,7 +218,7 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
           unit_amount: numericPrice.toString(), // Convertir en string comme demandé dans la doc
           tax_rate: numericTaxRate.toString(), // Convertir en string
           quantity: "1", // En string d'après la doc
-          description: `Abonnement mensuel - ${serviceName}`
+          description: `Abonnement mensuel - ${serviceDescription || serviceName}`
         }
       ]
     };
