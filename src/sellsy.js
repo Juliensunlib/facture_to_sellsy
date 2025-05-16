@@ -97,55 +97,112 @@ async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
 }
 
 export async function findPaymentMethodByName(nameToFind) {
-  const response = await sellsyRequest('post', '/payments/methods/search', {
-    filters: { is_active: true }
-  });
-  const method = response.data.find(m => m.label.toLowerCase().includes(nameToFind.toLowerCase()));
-  if (!method) throw new Error(`Méthode de paiement "${nameToFind}" non trouvée.`);
-  return method.id;
+  try {
+    console.log(`🔍 Recherche de la méthode de paiement "${nameToFind}"...`);
+    const response = await sellsyRequest('get', '/payments/methods');
+    
+    if (!response || !response.data) {
+      throw new Error("Aucune méthode de paiement trouvée dans la réponse");
+    }
+    
+    const method = response.data.find(m => 
+      m.label && m.label.toLowerCase().includes(nameToFind.toLowerCase())
+    );
+    
+    if (!method) {
+      console.warn(`⚠️ Méthode de paiement "${nameToFind}" non trouvée. Méthodes disponibles:`, 
+        response.data.map(m => m.label).join(', '));
+      throw new Error(`Méthode de paiement "${nameToFind}" non trouvée.`);
+    }
+    
+    console.log(`✅ Méthode de paiement trouvée: ${method.label} (ID: ${method.id})`);
+    return method.id;
+  } catch (error) {
+    console.error("❌ Erreur lors de la recherche de méthode de paiement:", error);
+    throw error;
+  }
 }
 
-export async function generateInvoice({ clientId, serviceId, serviceName, price, taxRate = 20 }) {
-  if (!clientId || !serviceName || !price) {
-    throw new Error(`Paramètres manquants: clientId=${clientId}, serviceName=${serviceName}, price=${price}`);
+export async function generateInvoice({ clientId, serviceId, serviceName, price, taxRate = 20, paymentMethod = 'gocardless' }) {
+  try {
+    console.log(`🔄 Génération d'une facture pour le client ID ${clientId}, service: ${serviceName}`);
+    
+    if (!clientId || !serviceName || !price) {
+      throw new Error(`Paramètres manquants: clientId=${clientId}, serviceName=${serviceName}, price=${price}`);
+    }
+    
+    // Recherche de l'ID de la méthode de paiement
+    let paymentMethodId;
+    try {
+      paymentMethodId = await findPaymentMethodByName(paymentMethod);
+    } catch (error) {
+      console.warn(`⚠️ Méthode de paiement non trouvée, la facture sera créée sans méthode de paiement spécifiée`);
+    }
+    
+    // Préparation des dates
+    const today = new Date();
+    const formattedDate = today.toISOString().split('T')[0];
+    
+    // Conversion des valeurs numériques
+    const numericPrice = parseFloat(price);
+    const numericTaxRate = parseFloat(taxRate);
+    const numericClientId = parseInt(clientId);
+    
+    console.log(`📊 Prix: ${numericPrice}, Taux TVA: ${numericTaxRate}%, Client ID: ${numericClientId}`);
+    
+    // Création de l'objet facture selon la documentation de l'API Sellsy V2
+    const invoiceData = {
+      date: formattedDate,
+      due_date: formattedDate,
+      subject: `Abonnement mensuel - ${serviceName}`,
+      currency: 'EUR',
+      
+      // Format correct pour l'objet "related" selon la documentation
+      related: [
+        {
+          id: numericClientId,
+          type: "client"  // "client" et non "clients"
+        }
+      ],
+      
+      // Ajout de la méthode de paiement si disponible
+      ...(paymentMethodId ? { payment_method_ids: [paymentMethodId] } : {}),
+      
+      note: "Facture prélevée automatiquement par prélèvement SEPA à réception. Aucune action requise de votre part.",
+      
+      // Format correct pour les lignes selon la documentation
+      rows: [
+        {
+          type: "service",
+          name: serviceName,
+          qty: 1,
+          unit_price: numericPrice,
+          tax_rate: numericTaxRate,
+          unit: "unité"
+        }
+      ]
+    };
+    
+    console.log("📄 Données facture :", JSON.stringify(invoiceData, null, 2));
+    
+    // Création de la facture
+    const invoice = await sellsyRequest('post', '/invoices', invoiceData);
+    console.log(`✅ Facture créée avec ID: ${invoice.id}`);
+    
+    // Validation de la facture (si nécessaire)
+    try {
+      await sellsyRequest('post', `/invoices/${invoice.id}/validate`, { date: formattedDate });
+      console.log(`✅ Facture ${invoice.id} validée avec succès`);
+    } catch (validationError) {
+      console.warn(`⚠️ Impossible de valider la facture: ${validationError.message}`);
+      console.log(`⚠️ La facture a été créée mais n'a pas pu être validée automatiquement.`);
+    }
+    
+    return invoice;
+  } catch (error) {
+    console.error("❌ Erreur lors de la génération de la facture:", error);
+    throw error;
   }
-  const paymentMethodId = await findPaymentMethodByName('prélèvement');
-  const today = new Date();
-  const formattedDate = today.toISOString().split('T')[0];
-  const numericPrice = parseFloat(price);
-  const numericTaxRate = parseFloat(taxRate);
-  const numericClientId = parseInt(clientId);
-
-  const invoiceData = {
-    date: formattedDate,
-    due_date: formattedDate,
-    subject: `Abonnement mensuel - ${serviceName}`,
-    related: {
-      id: numericClientId,
-      type: "clients" // ✅ CORRECT selon la doc Sellsy V2
-    },
-    payment_method_id: paymentMethodId,
-    note: "Facture prélevée automatiquement par prélèvement SEPA à réception. Aucune action requise de votre part.",
-    rows: [
-      {
-        type: "service",
-        name: serviceName,
-        qty: 1,
-        unit_price: numericPrice,
-        tax_rate: numericTaxRate,
-        unit: "unité"
-      }
-    ]
-  };
-
-  console.log("📄 Données facture :", JSON.stringify(invoiceData, null, 2));
-
-  const invoice = await sellsyRequest('post', '/invoices', invoiceData);
-  console.log(`✅ Facture créée avec ID: ${invoice.id}`);
-
-  await sellsyRequest('post', `/invoices/${invoice.id}/validate`, { date: formattedDate });
-  console.log(`✅ Facture ${invoice.id} validée avec succès`);
-  return invoice;
 }
 
 export async function checkSellsyConnection() {
@@ -154,9 +211,14 @@ export async function checkSellsyConnection() {
     checkSellsyCredentials();
     const token = await getAccessToken();
     if (!token) return false;
-    const response = await sellsyRequest('get', '/teams');
-    if (response && response.data) {
+    
+    // Test d'une requête simple pour vérifier la connexion
+    // Modification: utiliser un endpoint disponible dans l'API V2
+    const response = await sellsyRequest('get', '/companies/me');
+    
+    if (response) {
       console.log('✅ Connexion API Sellsy OK');
+      console.log(`🏢 Connecté au compte: ${response.name || 'Non défini'}`);
       return true;
     }
     return false;
