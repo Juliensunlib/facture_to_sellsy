@@ -262,7 +262,7 @@ async function generateInvoicesForServices(abonnement, services) {
         serviceName: service.fields['Nom du service'],
         price: service.fields['Prix HT'],
         taxRate: service.fields['Taux TVA'] || 20,
-        paymentMethod: 'gocardless'  // Toujours utiliser GoCardless
+        paymentMethod: 'prélèvement'  // Utiliser prélèvement au lieu de gocardless
       };
       
       // Générer la facture
