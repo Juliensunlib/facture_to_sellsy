@@ -3,6 +3,7 @@ import axios from 'axios';
 
 // URL de base pour l'API Sellsy V2
 const SELLSY_API_URL = 'https://api.sellsy.com/v2';
+const SELLSY_OAUTH_URL = 'https://login.sellsy.com/oauth2/access-tokens';
 
 // Stockage du token d'accès
 let accessToken = null;
@@ -10,7 +11,7 @@ let tokenExpiration = null;
 
 /**
  * Obtient un token d'accès OAuth2 pour l'API Sellsy
- * Avec gestion d'erreur améliorée et tentatives multiples
+ * Utilise le flux 'client_credentials' pour l'authentification
  */
 async function getAccessToken(retryCount = 0) {
   // Si le token est valide et n'a pas expiré, le retourner
@@ -24,13 +25,16 @@ async function getAccessToken(retryCount = 0) {
   try {
     console.log('🔄 Obtention d\'un nouveau token d\'accès Sellsy...');
     
-    const response = await axios.post('https://api.sellsy.com/oauth2/token', {
+    // Préparation des données pour la requête
+    const requestData = {
       grant_type: 'client_credentials',
       client_id: process.env.SELLSY_CLIENT_ID,
       client_secret: process.env.SELLSY_CLIENT_SECRET
-    }, {
+    };
+    
+    const response = await axios.post(SELLSY_OAUTH_URL, requestData, {
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
+        'Content-Type': 'application/json'
       }
     });
 
@@ -47,8 +51,15 @@ async function getAccessToken(retryCount = 0) {
     return accessToken;
   } catch (error) {
     // Afficher des informations détaillées sur l'erreur
-    const errorDetails = error.response?.data || error.message;
-    console.error(`❌ Erreur lors de l'obtention du token Sellsy (tentative ${retryCount + 1}/${MAX_RETRIES}):`, errorDetails);
+    console.error(`❌ Erreur lors de l'obtention du token Sellsy (tentative ${retryCount + 1}/${MAX_RETRIES}):`, error.message);
+    
+    if (error.response) {
+      console.error('Détails de l\'erreur:', {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data
+      });
+    }
     
     // Vérifier si nous pouvons réessayer
     if (retryCount < MAX_RETRIES - 1) {
@@ -100,8 +111,15 @@ async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
     const response = await axios(config);
     return response.data;
   } catch (error) {
-    const errorData = error.response?.data || error.message;
-    console.error(`❌ Erreur API Sellsy (${method} ${endpoint}) - tentative ${retryCount + 1}/${MAX_RETRIES}:`, errorData);
+    console.error(`❌ Erreur API Sellsy (${method} ${endpoint}) - tentative ${retryCount + 1}/${MAX_RETRIES}:`, error.message);
+    
+    if (error.response) {
+      console.error('Détails de l\'erreur:', {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data
+      });
+    }
     
     // Si erreur d'authentification (401), essayer de renouveler le token
     if (error.response?.status === 401) {
@@ -291,13 +309,28 @@ export async function generateInvoice({
   }
 }
 
-// Fonction pour vérifier la connexion avec l'API Sellsy
+/**
+ * Vérifie la connexion avec l'API Sellsy
+ */
 export async function checkSellsyConnection() {
   try {
     console.log('🔄 Vérification de la connexion à l\'API Sellsy...');
+    
+    // Vérifier les identifiants
+    checkSellsyCredentials();
+    
+    // Tenter d'obtenir un token d'accès
     const token = await getAccessToken();
     
-    if (token) {
+    if (!token) {
+      console.error('❌ Impossible d\'obtenir un token d\'accès Sellsy');
+      return false;
+    }
+    
+    // Tester l'accès à un endpoint simple (teams)
+    const response = await sellsyRequest('get', '/teams');
+    
+    if (response && response.data) {
       console.log('✅ Connexion à l\'API Sellsy établie avec succès');
       return true;
     }
