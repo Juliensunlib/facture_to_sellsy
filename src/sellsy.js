@@ -122,7 +122,7 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
     subject: `Abonnement mensuel - ${serviceName}`,
     related: {
       id: numericClientId,
-      type: "third" // ✅ CORRECT selon la doc Sellsy V2
+      type: "client" // ✅ CORRECT selon la doc Sellsy V2
     },
     payment_method_id: paymentMethodId,
     note: "Facture prélevée automatiquement par prélèvement SEPA à réception. Aucune action requise de votre part.",
