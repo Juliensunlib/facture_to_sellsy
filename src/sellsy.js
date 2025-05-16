@@ -150,34 +150,53 @@ export async function findPaymentMethodByName(nameToFind) {
 }
 
 /**
- * Recherche un mode de paiement en ligne par son nom
- * @param {string} nameToFind - Le nom du mode de paiement en ligne (ex: 'gocardless')
- * @returns {Promise<object|null>} - Les détails du mode de paiement ou null si non trouvé
+ * Recherche les modes de paiement disponibles pour une facture
+ * @param {string|number} invoiceId - L'ID de la facture
+ * @returns {Promise<Array>} - Liste des modes de paiement disponibles
  */
-export async function findOnlinePaymentMode(nameToFind) {
+export async function getInvoicePaymentModes(invoiceId) {
   try {
-    console.log(`🔍 Recherche du mode de paiement en ligne "${nameToFind}"...`);
-    const response = await sellsyRequest('get', '/payments/onlinemodes');
+    console.log(`🔍 Récupération des modes de paiement disponibles pour la facture ${invoiceId}...`);
+    const response = await sellsyRequest('get', `/invoices/${invoiceId}/payment-modes`);
     
     if (!response || !response.data) {
-      throw new Error("Aucun mode de paiement en ligne trouvé dans la réponse");
+      throw new Error("Aucun mode de paiement disponible pour cette facture");
     }
     
-    const mode = response.data.find(m => 
-      (m.gateway && m.gateway.toLowerCase() === nameToFind.toLowerCase()) ||
-      (m.name && m.name.toLowerCase().includes(nameToFind.toLowerCase()))
+    console.log(`✅ ${response.data.length} modes de paiement disponibles pour la facture ${invoiceId}`);
+    return response.data;
+  } catch (error) {
+    console.error(`❌ Erreur lors de la récupération des modes de paiement pour la facture ${invoiceId}:`, error.message);
+    return [];
+  }
+}
+
+/**
+ * Trouve le mode de paiement GoCardless pour une facture
+ * @param {string|number} invoiceId - L'ID de la facture
+ * @returns {Promise<Object|null>} - Le mode de paiement GoCardless ou null si non trouvé
+ */
+export async function findGoCardlessPaymentMode(invoiceId) {
+  try {
+    const paymentModes = await getInvoicePaymentModes(invoiceId);
+    
+    // Recherche du mode de paiement GoCardless
+    const goCardlessMode = paymentModes.find(mode => 
+      (mode.gateway && mode.gateway.toLowerCase() === 'gocardless') ||
+      (mode.name && mode.name.toLowerCase().includes('gocardless')) ||
+      (mode.type && mode.type.toLowerCase() === 'directdebit')
     );
     
-    if (!mode) {
-      console.warn(`⚠️ Mode de paiement "${nameToFind}" non trouvé. Modes disponibles:`, 
-        response.data.map(m => `${m.name} (${m.gateway})`).join(', '));
+    if (!goCardlessMode) {
+      console.warn('⚠️ Mode de paiement GoCardless non trouvé. Modes disponibles:', 
+        paymentModes.map(m => `${m.name || m.type || 'Non défini'}`).join(', '));
       return null;
     }
     
-    console.log(`✅ Mode de paiement en ligne trouvé: ${mode.name} (ID: ${mode.id})`);
-    return mode;
+    console.log(`✅ Mode de paiement GoCardless trouvé: ${goCardlessMode.name || goCardlessMode.type} (ID: ${goCardlessMode.id})`);
+    return goCardlessMode;
   } catch (error) {
-    console.error("❌ Erreur lors de la recherche du mode de paiement en ligne:", error);
+    console.error(`❌ Erreur lors de la recherche du mode GoCardless:`, error.message);
     return null;
   }
 }
@@ -213,27 +232,32 @@ export async function processInvoiceWithGoCardless(invoiceId) {
   try {
     console.log(`🔄 Traitement de la facture ${invoiceId} avec GoCardless...`);
     
-    // 1. Recherche du mode de paiement GoCardless
-    const goCardlessMode = await findOnlinePaymentMode('gocardless');
+    // 1. Récupérer les modes de paiement disponibles pour cette facture
+    const goCardlessMode = await findGoCardlessPaymentMode(invoiceId);
     
     if (!goCardlessMode) {
-      throw new Error('Mode de paiement GoCardless non disponible dans votre compte Sellsy');
+      throw new Error('Mode de paiement GoCardless non disponible pour cette facture');
     }
     
     // 2. Préparer le paiement
     const paymentData = {
-      amount: "full", // Payer le montant total de la facture
-      mode_id: goCardlessMode.id, // ID du mode de paiement GoCardless
-      type: "directdebit" // Type de paiement (prélèvement direct)
+      amount: "full",  // Payer le montant total de la facture
+      mode_id: goCardlessMode.id
     };
     
-    console.log(`💰 Préparation du paiement avec GoCardless (ID: ${goCardlessMode.id})...`);
+    // Si l'API exige un type spécifique, nous l'ajoutons
+    if (goCardlessMode.type) {
+      paymentData.type = goCardlessMode.type;
+    }
     
-    // 3. Créer le paiement en utilisant l'endpoint approprié
+    console.log(`💰 Préparation du paiement avec GoCardless (ID: ${goCardlessMode.id})...`);
+    console.log(`Données de paiement:`, JSON.stringify(paymentData, null, 2));
+    
+    // 3. Créer le paiement
     const payment = await sellsyRequest('post', `/invoices/${invoiceId}/payments`, paymentData);
     
     console.log(`✅ Paiement initié avec succès pour la facture ${invoiceId}`);
-    console.log(`📊 Détails du paiement: ID=${payment.id}, Statut=${payment.status}`);
+    console.log(`📊 Détails du paiement: ID=${payment.id}, Statut=${payment.status || 'Non défini'}`);
     
     return payment;
   } catch (error) {
