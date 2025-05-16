@@ -234,14 +234,8 @@ export async function createDirectDebitPayment(invoiceId, mandate) {
   try {
     console.log(`🔄 Création d'un paiement par prélèvement pour la facture ${invoiceId} avec le mandat ${mandate.id}...`);
     
-    // Selon la documentation Sellsy v2, utiliser le bon endpoint pour créer un paiement
-    // L'erreur 405 indique que l'endpoint /invoices/{id}/payments n'accepte pas POST
-    // Utiliser l'endpoint correct /payments au lieu de /invoices/{id}/payments
+    // Selon la documentation Sellsy v2, l'endpoint correct est /invoices/{id}/payments
     const paymentData = {
-      document: {
-        id: parseInt(invoiceId),
-        type: "invoice"
-      },
       date: new Date().toISOString().split('T')[0],  // Date du jour au format YYYY-MM-DD
       type: "directdebit",
       amount: "full",  // Montant total de la facture
@@ -254,7 +248,7 @@ export async function createDirectDebitPayment(invoiceId, mandate) {
     console.log(`💰 Données de paiement:`, JSON.stringify(paymentData, null, 2));
     
     // Créer le paiement via l'API Sellsy avec le bon endpoint
-    const payment = await sellsyRequest('post', `/payments`, paymentData);
+    const payment = await sellsyRequest('post', `/invoices/${invoiceId}/payments`, paymentData);
     
     console.log(`✅ Paiement initié avec succès pour la facture ${invoiceId}`);
     console.log(`📊 Détails du paiement: ID=${payment.id || 'Non défini'}, Statut=${payment.status || 'Non défini'}`);
