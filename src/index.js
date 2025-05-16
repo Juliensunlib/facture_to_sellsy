@@ -106,43 +106,71 @@ function checkIfInvoiceNeeded(abonnement) {
 
 /**
  * Récupère les services liés à un abonnement
+ * Version corrigée qui recherche par ID Sellsy
  */
 async function getServicesForSubscription(abonnement) {
-  // Récupérer les IDs des services liés
-  const servicesLies = abonnement.fields['Services liés'] || [];
+  // Récupérer les IDs Sellsy des services liés
+  const servicesIDs = abonnement.fields['Services liés'] || [];
   
-  if (servicesLies.length === 0) {
+  console.log(`🔍 Services liés pour l'abonnement ID ${abonnement.id}:`, servicesIDs);
+  
+  if (!servicesIDs.length) {
+    console.warn(`⚠️ Aucun ID de service trouvé pour l'abonnement ID ${abonnement.id}`);
     return [];
   }
   
-  // Récupérer les détails des services
-  const services = [];
+  // Récupérer l'ID du client Sellsy
+  const idSellsyClient = abonnement.fields['ID_Sellsy_abonné'];
   
-  for (const serviceId of servicesLies) {
-    try {
-      const service = await serviceTable.find(serviceId);
-      
-      // Vérifier si le service est actif et si c'est un abonnement
-      if (service.fields['Actif'] === 'Actif' && service.fields['Catégorie'] === 'Abonnement') {
-        // S'assurer que le service appartient bien au même client
-        const serviceClientId = service.fields['ID_Sellsy_abonné'] || '';
-        const abonnementClientId = abonnement.fields['ID_Sellsy_abonné'] || '';
-        
-        if (serviceClientId && abonnementClientId && serviceClientId === abonnementClientId) {
-          services.push({
-            id: service.id,
-            fields: service.fields
-          });
-        } else {
-          console.warn(`⚠️ Service ID ${serviceId}: ID client incohérent avec l'abonnement`);
-        }
-      }
-    } catch (error) {
-      console.error(`❌ Erreur lors de la récupération du service ID ${serviceId}:`, error);
-    }
+  if (!idSellsyClient) {
+    console.warn(`⚠️ ID Sellsy client non défini pour l'abonnement ID ${abonnement.id}`);
+    return [];
   }
   
-  return services;
+  // Récupérer les services correspondant aux IDs Sellsy
+  return new Promise((resolve, reject) => {
+    const services = [];
+    
+    // Créer un tableau de promesses pour récupérer chaque service individuellement
+    const servicePromises = servicesIDs.map(idSellsy => {
+      return new Promise((resolveService, rejectService) => {
+        serviceTable.select({
+          filterByFormula: `AND({ID Sellsy} = '${idSellsy}', {ID_Sellsy_abonné} = '${idSellsyClient}', {Actif} = 'Actif', {Catégorie} = 'Abonnement')`,
+          maxRecords: 1,
+          view: "Grid view"
+        }).firstPage((err, records) => {
+          if (err) {
+            console.error(`❌ Erreur lors de la recherche du service ID Sellsy ${idSellsy}:`, err);
+            rejectService(err);
+            return;
+          }
+          
+          if (records && records.length > 0) {
+            console.log(`✅ Service trouvé: ${records[0].fields['Nom du service']} (ID Sellsy: ${idSellsy})`);
+            services.push({
+              id: records[0].id,
+              fields: records[0].fields
+            });
+          } else {
+            console.warn(`⚠️ Aucun service actif trouvé pour l'ID Sellsy ${idSellsy}`);
+          }
+          
+          resolveService();
+        });
+      });
+    });
+    
+    // Attendre que toutes les requêtes de service soient terminées
+    Promise.all(servicePromises)
+      .then(() => {
+        console.log(`✅ Total de ${services.length} services valides trouvés pour l'abonnement ID ${abonnement.id}`);
+        resolve(services);
+      })
+      .catch(error => {
+        console.error('❌ Erreur lors de la récupération des services:', error);
+        reject(error);
+      });
+  });
 }
 
 /**
