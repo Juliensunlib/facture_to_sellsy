@@ -304,7 +304,7 @@ export async function generateInvoice({
       due_date: formattedDate, // Même date = paiement à réception
       subject: `Abonnement mensuel - ${serviceName}`,
       related: {
-        id: numericClientId,
+        id: numericClientId.toString(),
         type: "companies"
       },
       payment_method_id: paymentMethodId,
