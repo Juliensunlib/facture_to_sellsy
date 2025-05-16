@@ -11,35 +11,44 @@ let tokenExpiration = null;
 
 /**
  * Obtient un token d'accès pour l'API Sellsy
- * @param {number} retryCount - Le nombre de tentatives déjà effectuées
  * @returns {Promise<string>} - Le token d'accès
  */
 async function getAccessToken(retryCount = 0) {
+  // Réutiliser le token si encore valide
   if (accessToken && tokenExpiration && tokenExpiration > Date.now()) {
     return accessToken;
   }
+  
   const MAX_RETRIES = 3;
+  
   try {
     console.log("🔄 Obtention d'un nouveau token d'accès Sellsy...");
+    
     const requestData = {
       grant_type: 'client_credentials',
       client_id: process.env.SELLSY_CLIENT_ID,
       client_secret: process.env.SELLSY_CLIENT_SECRET
     };
+    
     const response = await axios.post(SELLSY_OAUTH_URL, requestData, {
       headers: {
         'Content-Type': 'application/json'
       }
     });
+    
     if (!response.data || !response.data.access_token) {
       throw new Error("Token non reçu dans la réponse de l'API Sellsy");
     }
+    
     console.log("✅ Token d'accès Sellsy obtenu avec succès");
     accessToken = response.data.access_token;
-    tokenExpiration = Date.now() + (response.data.expires_in * 1000) - 300000; // 5 minutes de marge
+    // Ajouter une marge de sécurité de 5 minutes
+    tokenExpiration = Date.now() + (response.data.expires_in * 1000) - 300000;
+    
     return accessToken;
   } catch (error) {
     console.error(`❌ Erreur lors de l'obtention du token Sellsy (tentative ${retryCount + 1}/${MAX_RETRIES}):`, error.message);
+    
     if (error.response) {
       console.error('Détails de l\'erreur:', {
         status: error.response.status,
@@ -47,21 +56,14 @@ async function getAccessToken(retryCount = 0) {
         data: error.response.data
       });
     }
+    
     if (retryCount < MAX_RETRIES - 1) {
+      // Attendre avant de réessayer
       await new Promise(resolve => setTimeout(resolve, 3000));
       return getAccessToken(retryCount + 1);
     }
+    
     throw new Error("Impossible d'obtenir un token d'accès Sellsy après plusieurs tentatives.");
-  }
-}
-
-/**
- * Vérifie que les identifiants Sellsy sont configurés
- * @throws {Error} - Si les identifiants ne sont pas configurés
- */
-function checkSellsyCredentials() {
-  if (!process.env.SELLSY_CLIENT_ID || !process.env.SELLSY_CLIENT_SECRET) {
-    throw new Error('Les identifiants Sellsy ne sont pas configurés.');
   }
 }
 
@@ -70,14 +72,14 @@ function checkSellsyCredentials() {
  * @param {string} method - La méthode HTTP (get, post, etc.)
  * @param {string} endpoint - L'endpoint API (sans le préfixe d'URL)
  * @param {Object|null} data - Les données à envoyer (pour POST, PUT, etc.)
- * @param {number} retryCount - Le nombre de tentatives déjà effectuées
  * @returns {Promise<Object>} - La réponse de l'API
  */
 async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
-  checkSellsyCredentials();
   const MAX_RETRIES = 3;
+  
   try {
     const token = await getAccessToken();
+    
     const config = {
       method,
       url: `${SELLSY_API_URL}${endpoint}`,
@@ -86,6 +88,7 @@ async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
         'Content-Type': 'application/json'
       }
     };
+    
     if (data) config.data = data;
     
     console.log(`🔄 Requête ${method.toUpperCase()} à ${endpoint}...`);
@@ -93,26 +96,32 @@ async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
     return response.data;
   } catch (error) {
     console.error(`❌ Erreur API Sellsy (${method} ${endpoint}) - tentative ${retryCount + 1}/${MAX_RETRIES}:`, error.message);
+    
     if (error.response) {
       console.error("Détails de l'erreur:", error.response.data);
+      
       if (error.response.status === 400 && data) {
         console.error("Corps de la requête erronée:", JSON.stringify(data, null, 2));
       }
     }
+    
     // Réessayer en cas d'erreur d'authentification
     if (error.response?.status === 401) {
       accessToken = null;
       tokenExpiration = null;
+      
       if (retryCount < MAX_RETRIES - 1) {
         await new Promise(resolve => setTimeout(resolve, 2000));
         return sellsyRequest(method, endpoint, data, retryCount + 1);
       }
     }
+    
     // Réessayer pour les autres erreurs (sauf 400 Bad Request)
     if (retryCount < MAX_RETRIES - 1 && error.response?.status !== 400) {
       await new Promise(resolve => setTimeout(resolve, 2000));
       return sellsyRequest(method, endpoint, data, retryCount + 1);
     }
+    
     throw error;
   }
 }
@@ -150,49 +159,41 @@ export async function findPaymentMethodByName(nameToFind) {
 }
 
 /**
- * Génère une facture dans Sellsy
+ * Génère une facture dans Sellsy (version simplifiée utilisant les références du catalogue)
  * @param {Object} options - Les options pour la création de facture
  * @param {string|number} options.clientId - L'ID client Sellsy
  * @param {string|number} options.serviceId - L'ID service Sellsy
- * @param {string} options.serviceName - Le nom du service
- * @param {number|string} options.price - Le prix HT
- * @param {number|string} options.taxRate - Le taux de TVA (par défaut 20)
- * @param {string} options.paymentMethod - La méthode de paiement (par défaut 'prélèvement')
  * @returns {Promise<Object>} - La facture créée
  */
-export async function generateInvoice({ clientId, serviceId, serviceName, price, taxRate = 20, paymentMethod = 'prélèvement' }) {
+export async function generateInvoice({ clientId, serviceId }) {
   try {
-    console.log(`🔄 Génération d'une facture pour le client ID ${clientId}, service: ${serviceName}`);
+    console.log(`🔄 Génération d'une facture pour le client ID ${clientId}, service ID: ${serviceId}`);
     
-    if (!clientId || !serviceName || !price) {
-      throw new Error(`Paramètres manquants: clientId=${clientId}, serviceName=${serviceName}, price=${price}`);
-    }
-    
-    // Recherche de l'ID de la méthode de paiement
-    let paymentMethodId;
-    try {
-      paymentMethodId = await findPaymentMethodByName(paymentMethod);
-    } catch (error) {
-      console.warn(`⚠️ Méthode de paiement non trouvée, la facture sera créée sans méthode de paiement spécifiée`);
+    if (!clientId || !serviceId) {
+      throw new Error(`Paramètres manquants: clientId=${clientId}, serviceId=${serviceId}`);
     }
     
     // Préparation des dates
     const today = new Date();
     const formattedDate = today.toISOString().split('T')[0];
     
-    // Conversion des valeurs numériques
-    const numericPrice = parseFloat(price);
-    const numericTaxRate = parseFloat(taxRate);
+    // Conversion des valeurs en nombres
     const numericClientId = parseInt(clientId);
     const numericServiceId = parseInt(serviceId);
     
-    console.log(`📊 Prix: ${numericPrice}, Taux TVA: ${numericTaxRate}%, Client ID: ${numericClientId}`);
+    // Recherche de l'ID de la méthode de paiement
+    let paymentMethodId;
+    try {
+      paymentMethodId = await findPaymentMethodByName('prélèvement');
+    } catch (error) {
+      console.warn(`⚠️ Méthode de paiement non trouvée, la facture sera créée sans méthode de paiement spécifiée`);
+    }
     
-    // Création de l'objet facture selon la documentation de l'API Sellsy V2
+    // Création de l'objet facture avec le minimum d'informations
+    // Sellsy complétera automatiquement les détails du service depuis son catalogue
     const invoiceData = {
       date: formattedDate,
       due_date: formattedDate,
-      subject: `Abonnement mensuel - ${serviceName}`,
       currency: "EUR",
       
       related: [
@@ -209,34 +210,28 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       
       rows: [
         {
-          // Utiliser "catalog" comme type selon la documentation Sellsy V2
           type: "catalog",
           related: {
             id: numericServiceId,
             type: "service"
           },
-          unit_amount: numericPrice.toString(), // Convertir en string comme demandé dans la doc
-          tax_rate: numericTaxRate.toString(), // Convertir en string
-          quantity: "1", // En string d'après la doc
-          name: serviceName,
-          description: `Abonnement mensuel - ${serviceName}`
+          quantity: "1" // En string d'après la doc API Sellsy
         }
       ]
     };
     
-    console.log("📄 Données facture :", JSON.stringify(invoiceData, null, 2));
+    console.log("📄 Données facture simplifiées:", JSON.stringify(invoiceData, null, 2));
     
     // Création de la facture
     const invoice = await sellsyRequest('post', '/invoices', invoiceData);
     console.log(`✅ Facture créée avec ID: ${invoice.id}`);
     
-    // Validation de la facture (si nécessaire)
+    // Validation de la facture
     try {
       await sellsyRequest('post', `/invoices/${invoice.id}/validate`, { date: formattedDate });
       console.log(`✅ Facture ${invoice.id} validée avec succès`);
     } catch (validationError) {
       console.warn(`⚠️ Impossible de valider la facture: ${validationError.message}`);
-      console.log(`⚠️ La facture a été créée mais n'a pas pu être validée automatiquement.`);
     }
     
     return invoice;
@@ -253,12 +248,15 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
 export async function checkSellsyConnection() {
   try {
     console.log('🔄 Vérification connexion API Sellsy...');
-    checkSellsyCredentials();
+    
+    if (!process.env.SELLSY_CLIENT_ID || !process.env.SELLSY_CLIENT_SECRET) {
+      throw new Error('Les identifiants Sellsy ne sont pas configurés.');
+    }
+    
     const token = await getAccessToken();
     if (!token) return false;
     
-    // Au lieu de /account/info qui n'existe pas, utiliser un endpoint existant
-    // /companies pour récupérer la liste des entreprises (limité à 1 résultat pour éviter une charge inutile)
+    // Test simple de l'API en récupérant une liste minimale de clients
     const response = await sellsyRequest('get', '/companies?limit=1');
     
     if (response) {
