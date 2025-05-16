@@ -225,54 +225,66 @@ export async function findDefaultGoCardlessMandate(clientId) {
 }
 
 /**
- * Recherche les modes de paiement disponibles pour une facture
+ * Crée un paiement pour une facture avec GoCardless
  * @param {string|number} invoiceId - L'ID de la facture
- * @returns {Promise<Array>} - Liste des modes de paiement disponibles
+ * @param {object} mandate - L'objet mandat GoCardless
+ * @returns {Promise<Object>} - Le paiement créé
  */
-export async function getInvoicePaymentModes(invoiceId) {
+export async function createDirectDebitPayment(invoiceId, mandate) {
   try {
-    console.log(`🔍 Récupération des modes de paiement disponibles pour la facture ${invoiceId}...`);
-    const response = await sellsyRequest('get', `/invoices/${invoiceId}/payment-modes`);
+    console.log(`🔄 Création d'un paiement par prélèvement pour la facture ${invoiceId} avec le mandat ${mandate.id}...`);
     
-    if (!response || !response.data) {
-      throw new Error("Aucun mode de paiement disponible pour cette facture");
-    }
+    // Selon la documentation Sellsy v2, le payload pour créer un paiement
+    const paymentData = {
+      type: 'directdebit',
+      amount: 'full',  // Montant total de la facture
+      date: new Date().toISOString().split('T')[0],  // Date du jour au format YYYY-MM-DD
+      mandate_id: mandate.id,
+      note: 'Prélèvement automatique GoCardless'
+    };
     
-    console.log(`✅ ${response.data.length} modes de paiement disponibles pour la facture ${invoiceId}`);
-    return response.data;
+    console.log(`💰 Données de paiement:`, JSON.stringify(paymentData, null, 2));
+    
+    // Créer le paiement via l'API Sellsy
+    const payment = await sellsyRequest('post', `/invoices/${invoiceId}/payments`, paymentData);
+    
+    console.log(`✅ Paiement initié avec succès pour la facture ${invoiceId}`);
+    console.log(`📊 Détails du paiement: ID=${payment.id || 'Non défini'}, Statut=${payment.status || 'Non défini'}`);
+    
+    return payment;
   } catch (error) {
-    console.error(`❌ Erreur lors de la récupération des modes de paiement pour la facture ${invoiceId}:`, error.message);
-    return [];
+    console.error(`❌ Erreur lors de la création du paiement pour la facture ${invoiceId}:`, error.message);
+    if (error.response) {
+      console.error("Détails de l'erreur:", error.response.data);
+    }
+    throw error;
   }
 }
 
 /**
- * Trouve le mode de paiement GoCardless pour une facture
+ * Traite le paiement d'une facture avec GoCardless
  * @param {string|number} invoiceId - L'ID de la facture
- * @returns {Promise<Object|null>} - Le mode de paiement GoCardless ou null si non trouvé
+ * @param {string|number} clientId - L'ID du client
+ * @returns {Promise<Object>} - Résultat du traitement
  */
-export async function findGoCardlessPaymentMode(invoiceId) {
+export async function processInvoiceWithGoCardless(invoiceId, clientId) {
   try {
-    const paymentModes = await getInvoicePaymentModes(invoiceId);
+    console.log(`🔄 Traitement de la facture ${invoiceId} avec GoCardless pour le client ${clientId}...`);
     
-    // Recherche du mode de paiement GoCardless
-    const goCardlessMode = paymentModes.find(mode => 
-      (mode.gateway && mode.gateway.toLowerCase() === 'gocardless') ||
-      (mode.name && mode.name.toLowerCase().includes('gocardless')) ||
-      (mode.type && mode.type.toLowerCase() === 'directdebit')
-    );
+    // 1. Vérifier si le client a un mandat GoCardless actif
+    const mandate = await findDefaultGoCardlessMandate(clientId);
     
-    if (!goCardlessMode) {
-      console.warn('⚠️ Mode de paiement GoCardless non trouvé. Modes disponibles:', 
-        paymentModes.map(m => `${m.name || m.type || 'Non défini'}`).join(', '));
-      return null;
+    if (!mandate) {
+      throw new Error(`Aucun mandat GoCardless actif trouvé pour le client ID ${clientId}`);
     }
     
-    console.log(`✅ Mode de paiement GoCardless trouvé: ${goCardlessMode.name || goCardlessMode.type} (ID: ${goCardlessMode.id})`);
-    return goCardlessMode;
+    // 2. Créer directement le paiement avec le mandat
+    const payment = await createDirectDebitPayment(invoiceId, mandate);
+    
+    return payment;
   } catch (error) {
-    console.error(`❌ Erreur lors de la recherche du mode GoCardless:`, error.message);
-    return null;
+    console.error(`❌ Erreur lors du traitement de la facture ${invoiceId} avec GoCardless:`, error.message);
+    throw error;
   }
 }
 
@@ -294,61 +306,6 @@ export async function getServiceDetails(serviceId) {
     return response;
   } catch (error) {
     console.error(`❌ Erreur lors de la récupération des détails du service ${serviceId}:`, error.message);
-    throw error;
-  }
-}
-
-/**
- * Vérifie si un client a un mandat GoCardless actif et initie un prélèvement
- * @param {string|number} invoiceId - L'ID de la facture
- * @param {string|number} clientId - L'ID du client
- * @returns {Promise<Object>} - Résultat du traitement
- */
-export async function processInvoiceWithGoCardless(invoiceId, clientId) {
-  try {
-    console.log(`🔄 Traitement de la facture ${invoiceId} avec GoCardless pour le client ${clientId}...`);
-    
-    // 1. Vérifier si le client a un mandat GoCardless actif
-    const mandate = await findDefaultGoCardlessMandate(clientId);
-    
-    if (!mandate) {
-      throw new Error(`Aucun mandat GoCardless actif trouvé pour le client ID ${clientId}`);
-    }
-    
-    // 2. Récupérer les modes de paiement disponibles pour cette facture
-    const goCardlessMode = await findGoCardlessPaymentMode(invoiceId);
-    
-    if (!goCardlessMode) {
-      throw new Error('Mode de paiement GoCardless non disponible pour cette facture');
-    }
-    
-    // 3. Préparer le paiement
-    const paymentData = {
-      amount: "full",  // Payer le montant total de la facture
-      mode_id: goCardlessMode.id,
-      mandate_id: mandate.id  // Ajouter l'ID du mandat GoCardless
-    };
-    
-    // Si l'API exige un type spécifique, nous l'ajoutons
-    if (goCardlessMode.type) {
-      paymentData.type = goCardlessMode.type;
-    }
-    
-    console.log(`💰 Préparation du paiement avec GoCardless (Mode ID: ${goCardlessMode.id}, Mandat ID: ${mandate.id})...`);
-    console.log(`Données de paiement:`, JSON.stringify(paymentData, null, 2));
-    
-    // 4. Créer le paiement
-    const payment = await sellsyRequest('post', `/invoices/${invoiceId}/payments`, paymentData);
-    
-    console.log(`✅ Paiement initié avec succès pour la facture ${invoiceId}`);
-    console.log(`📊 Détails du paiement: ID=${payment.id}, Statut=${payment.status || 'Non défini'}`);
-    
-    return payment;
-  } catch (error) {
-    console.error(`❌ Erreur lors du traitement de la facture ${invoiceId} avec GoCardless:`, error.message);
-    if (error.response) {
-      console.error("Détails de l'erreur:", error.response.data);
-    }
     throw error;
   }
 }
