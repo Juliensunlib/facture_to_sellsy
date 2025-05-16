@@ -150,6 +150,28 @@ export async function findPaymentMethodByName(nameToFind) {
 }
 
 /**
+ * Récupère les détails d'un service depuis Sellsy
+ * @param {string|number} serviceId - L'ID du service à récupérer
+ * @returns {Promise<Object>} - Les détails du service
+ */
+export async function getServiceDetails(serviceId) {
+  try {
+    console.log(`🔍 Récupération des détails du service ID ${serviceId}...`);
+    const response = await sellsyRequest('get', `/services/${serviceId}`);
+    
+    if (!response) {
+      throw new Error(`Aucune information trouvée pour le service ID ${serviceId}`);
+    }
+    
+    console.log(`✅ Détails du service ID ${serviceId} récupérés`);
+    return response;
+  } catch (error) {
+    console.error(`❌ Erreur lors de la récupération des détails du service ${serviceId}:`, error.message);
+    throw error;
+  }
+}
+
+/**
  * Génère une facture dans Sellsy
  * @param {Object} options - Les options pour la création de facture
  * @param {string|number} options.clientId - L'ID client Sellsy
@@ -218,7 +240,7 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
           unit_amount: numericPrice.toString(), // Convertir en string comme demandé dans la doc
           tax_rate: numericTaxRate.toString(), // Convertir en string
           quantity: "1", // En string d'après la doc
-          description: serviceDescription
+          // Ne pas spécifier la description, Sellsy utilisera la description du service du catalogue
         }
       ]
     };
