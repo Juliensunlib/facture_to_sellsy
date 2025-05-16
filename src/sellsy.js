@@ -157,10 +157,10 @@ export async function findPaymentMethodByName(nameToFind) {
  * @param {string} options.serviceName - Le nom du service
  * @param {number|string} options.price - Le prix HT
  * @param {number|string} options.taxRate - Le taux de TVA (par défaut 20)
- * @param {string} options.paymentMethod - La méthode de paiement (par défaut 'gocardless')
+ * @param {string} options.paymentMethod - La méthode de paiement (par défaut 'prélèvement')
  * @returns {Promise<Object>} - La facture créée
  */
-export async function generateInvoice({ clientId, serviceId, serviceName, price, taxRate = 20, paymentMethod = 'gocardless' }) {
+export async function generateInvoice({ clientId, serviceId, serviceName, price, taxRate = 20, paymentMethod = 'prélèvement' }) {
   try {
     console.log(`🔄 Génération d'une facture pour le client ID ${clientId}, service: ${serviceName}`);
     
