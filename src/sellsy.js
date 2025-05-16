@@ -9,6 +9,11 @@ const SELLSY_OAUTH_URL = 'https://login.sellsy.com/oauth2/access-tokens';
 let accessToken = null;
 let tokenExpiration = null;
 
+/**
+ * Obtient un token d'accès pour l'API Sellsy
+ * @param {number} retryCount - Le nombre de tentatives déjà effectuées
+ * @returns {Promise<string>} - Le token d'accès
+ */
 async function getAccessToken(retryCount = 0) {
   if (accessToken && tokenExpiration && tokenExpiration > Date.now()) {
     return accessToken;
@@ -31,7 +36,7 @@ async function getAccessToken(retryCount = 0) {
     }
     console.log("✅ Token d'accès Sellsy obtenu avec succès");
     accessToken = response.data.access_token;
-    tokenExpiration = Date.now() + (response.data.expires_in * 1000) - 300000;
+    tokenExpiration = Date.now() + (response.data.expires_in * 1000) - 300000; // 5 minutes de marge
     return accessToken;
   } catch (error) {
     console.error(`❌ Erreur lors de l'obtention du token Sellsy (tentative ${retryCount + 1}/${MAX_RETRIES}):`, error.message);
@@ -50,12 +55,24 @@ async function getAccessToken(retryCount = 0) {
   }
 }
 
+/**
+ * Vérifie que les identifiants Sellsy sont configurés
+ * @throws {Error} - Si les identifiants ne sont pas configurés
+ */
 function checkSellsyCredentials() {
   if (!process.env.SELLSY_CLIENT_ID || !process.env.SELLSY_CLIENT_SECRET) {
     throw new Error('Les identifiants Sellsy ne sont pas configurés.');
   }
 }
 
+/**
+ * Effectue une requête à l'API Sellsy
+ * @param {string} method - La méthode HTTP (get, post, etc.)
+ * @param {string} endpoint - L'endpoint API (sans le préfixe d'URL)
+ * @param {Object|null} data - Les données à envoyer (pour POST, PUT, etc.)
+ * @param {number} retryCount - Le nombre de tentatives déjà effectuées
+ * @returns {Promise<Object>} - La réponse de l'API
+ */
 async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
   checkSellsyCredentials();
   const MAX_RETRIES = 3;
@@ -70,6 +87,8 @@ async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
       }
     };
     if (data) config.data = data;
+    
+    console.log(`🔄 Requête ${method.toUpperCase()} à ${endpoint}...`);
     const response = await axios(config);
     return response.data;
   } catch (error) {
@@ -80,6 +99,7 @@ async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
         console.error("Corps de la requête erronée:", JSON.stringify(data, null, 2));
       }
     }
+    // Réessayer en cas d'erreur d'authentification
     if (error.response?.status === 401) {
       accessToken = null;
       tokenExpiration = null;
@@ -88,6 +108,7 @@ async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
         return sellsyRequest(method, endpoint, data, retryCount + 1);
       }
     }
+    // Réessayer pour les autres erreurs (sauf 400 Bad Request)
     if (retryCount < MAX_RETRIES - 1 && error.code !== 'ERR_BAD_REQUEST') {
       await new Promise(resolve => setTimeout(resolve, 2000));
       return sellsyRequest(method, endpoint, data, retryCount + 1);
@@ -96,6 +117,11 @@ async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
   }
 }
 
+/**
+ * Recherche une méthode de paiement par son nom
+ * @param {string} nameToFind - Le nom de la méthode de paiement à chercher
+ * @returns {Promise<string>} - L'ID de la méthode de paiement
+ */
 export async function findPaymentMethodByName(nameToFind) {
   try {
     console.log(`🔍 Recherche de la méthode de paiement "${nameToFind}"...`);
@@ -123,6 +149,17 @@ export async function findPaymentMethodByName(nameToFind) {
   }
 }
 
+/**
+ * Génère une facture dans Sellsy
+ * @param {Object} options - Les options pour la création de facture
+ * @param {string|number} options.clientId - L'ID client Sellsy
+ * @param {string|number} options.serviceId - L'ID service Sellsy
+ * @param {string} options.serviceName - Le nom du service
+ * @param {number|string} options.price - Le prix HT
+ * @param {number|string} options.taxRate - Le taux de TVA (par défaut 20)
+ * @param {string} options.paymentMethod - La méthode de paiement (par défaut 'gocardless')
+ * @returns {Promise<Object>} - La facture créée
+ */
 export async function generateInvoice({ clientId, serviceId, serviceName, price, taxRate = 20, paymentMethod = 'gocardless' }) {
   try {
     console.log(`🔄 Génération d'une facture pour le client ID ${clientId}, service: ${serviceName}`);
@@ -205,6 +242,10 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
   }
 }
 
+/**
+ * Vérifie la connexion à l'API Sellsy
+ * @returns {Promise<boolean>} - Vrai si la connexion est établie avec succès
+ */
 export async function checkSellsyConnection() {
   try {
     console.log('🔄 Vérification connexion API Sellsy...');
@@ -212,13 +253,17 @@ export async function checkSellsyConnection() {
     const token = await getAccessToken();
     if (!token) return false;
     
-    // Test d'une requête simple pour vérifier la connexion
-    // Utiliser un endpoint disponible dans l'API V2
-    const response = await sellsyRequest('get', '/account/info');
+    // Au lieu de /account/info qui n'existe pas, utiliser un endpoint existant
+    // /companies pour récupérer la liste des entreprises (limité à 1 résultat pour éviter une charge inutile)
+    const response = await sellsyRequest('get', '/companies?limit=1');
     
     if (response) {
       console.log('✅ Connexion API Sellsy OK');
-      console.log(`🏢 Connecté au compte: ${response.name || 'Non défini'}`);
+      if (response.data && response.data.length > 0) {
+        console.log(`🏢 Premier client trouvé: ${response.data[0].name || 'Non défini'}`);
+      } else {
+        console.log(`🏢 Connecté à l'API Sellsy (aucun client trouvé)`);
+      }
       return true;
     }
     return false;
