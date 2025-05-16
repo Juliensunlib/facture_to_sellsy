@@ -106,7 +106,7 @@ function checkIfInvoiceNeeded(abonnement) {
 
 /**
  * Récupère les services liés à un abonnement
- * Version corrigée qui tient compte des références Airtable
+ * Version corrigée qui tient compte des références Airtable et des valeurs booléennes
  */
 async function getServicesForSubscription(abonnement) {
   // Récupérer les IDs Airtable des services liés
@@ -137,13 +137,14 @@ async function getServicesForSubscription(abonnement) {
       const service = await serviceTable.find(recordId);
       
       console.log(`🔍 Service trouvé: ${service.fields['Nom du service'] || 'Sans nom'}`);
-      console.log(`   - Statut: ${service.fields['Actif'] || 'Non défini'}`);
+      console.log(`   - Statut: ${service.fields['Actif']}`);
       console.log(`   - Catégorie: ${service.fields['Catégorie'] || 'Non définie'}`);
       console.log(`   - ID Client Service: ${service.fields['ID_Sellsy_abonné'] || 'Non défini'}`);
       console.log(`   - ID Client Abonnement: ${idSellsyClient}`);
+      console.log(`   - ID Sellsy Service: ${service.fields['ID Sellsy'] || 'Non défini'}`);
       
-      // Vérifier si le service est actif
-      if (service.fields['Actif'] !== 'Actif') {
+      // Vérifier si le service est actif (accepte à la fois "Actif" et true)
+      if (service.fields['Actif'] !== 'Actif' && service.fields['Actif'] !== true) {
         console.warn(`⚠️ Service ${recordId}: n'est pas actif`);
         continue;
       }
@@ -199,12 +200,19 @@ async function generateInvoicesForServices(abonnement, services) {
       continue;
     }
     
+    // Récupérer l'ID Sellsy du service
+    const idSellsyService = service.fields['ID Sellsy'];
+    if (!idSellsyService) {
+      console.warn(`⚠️ ID Sellsy service non défini pour le service ID ${service.id}`);
+      continue;
+    }
+    
     // Générer la facture dans Sellsy
     try {
       // Récupérer les informations du service
       const serviceInfo = {
         clientId: idSellsyClient,
-        serviceId: service.fields['ID Sellsy'],
+        serviceId: idSellsyService,
         serviceName: service.fields['Nom du service'],
         price: service.fields['Prix HT'],
         taxRate: service.fields['Taux TVA'] || 20,
