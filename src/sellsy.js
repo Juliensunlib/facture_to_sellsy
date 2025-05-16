@@ -119,6 +119,11 @@ async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
         statusText: error.response.statusText,
         data: error.response.data
       });
+      
+      // Afficher le corps complet de la requête en cas d'erreur 400
+      if (error.response.status === 400 && data) {
+        console.error('Corps de la requête qui a causé l\'erreur:', JSON.stringify(data, null, 2));
+      }
     }
     
     // Si erreur d'authentification (401), essayer de renouveler le token
@@ -150,9 +155,9 @@ async function sellsyRequest(method, endpoint, data = null, retryCount = 0) {
 /**
  * Recherche une méthode de paiement par son nom
  */
-async function findPaymentMethodByName(name) {
+async function findPaymentMethodByName(nameToFind) {
   try {
-    console.log(`🔍 Recherche de la méthode de paiement "${name}"...`);
+    console.log(`🔍 Recherche de la méthode de paiement "${nameToFind}"...`);
     
     const response = await sellsyRequest('post', '/payments/methods/search', {
       filters: {
@@ -166,23 +171,47 @@ async function findPaymentMethodByName(name) {
     
     console.log(`✅ ${response.data.length} méthodes de paiement trouvées`);
     
-    // Recherche par nom (insensible à la casse)
+    // Afficher toutes les méthodes disponibles pour le débogage
+    const availableMethods = response.data.map(m => m.label).join(', ');
+    console.log(`📋 Méthodes de paiement disponibles: ${availableMethods}`);
+    
+    // Rechercher "Prélèvement" en priorité si on demande "gocardless"
+    if (nameToFind.toLowerCase() === 'gocardless' || nameToFind.toLowerCase() === 'prélèvement') {
+      const prelevementMethod = response.data.find(method => 
+        method.label.toLowerCase() === 'prélèvement'
+      );
+      
+      if (prelevementMethod) {
+        console.log(`✅ Méthode de paiement "Prélèvement" (ID: ${prelevementMethod.id}) trouvée`);
+        return prelevementMethod.id;
+      }
+    }
+    
+    // Sinon, recherche standard par nom (insensible à la casse)
     const paymentMethod = response.data.find(method => 
-      method.label.toLowerCase().includes(name.toLowerCase())
+      method.label.toLowerCase().includes(nameToFind.toLowerCase())
     );
     
     if (!paymentMethod) {
-      // Liste des méthodes disponibles pour le débogage
-      const availableMethods = response.data.map(m => m.label).join(', ');
-      console.warn(`⚠️ Méthode de paiement "${name}" non trouvée. Méthodes disponibles: ${availableMethods}`);
+      // Si on ne trouve pas la méthode spécifique, chercher une méthode de prélèvement
+      const directDebitMethod = response.data.find(method => 
+        method.label.toLowerCase().includes('prélèvement') || 
+        method.label.toLowerCase().includes('sepa') ||
+        method.label.toLowerCase().includes('direct debit')
+      );
       
-      // Si on ne trouve pas GoCardless, essayer de prendre la première méthode active
+      if (directDebitMethod) {
+        console.log(`ℹ️ Utilisation de la méthode de prélèvement trouvée: ${directDebitMethod.label} (ID: ${directDebitMethod.id})`);
+        return directDebitMethod.id;
+      }
+      
+      // Si on ne trouve aucune méthode de prélèvement, prendre la première méthode active
       if (response.data.length > 0) {
-        console.log(`ℹ️ Utilisation de la méthode de paiement par défaut: ${response.data[0].label}`);
+        console.log(`ℹ️ Utilisation de la méthode de paiement par défaut: ${response.data[0].label} (ID: ${response.data[0].id})`);
         return response.data[0].id;
       }
       
-      throw new Error(`Méthode de paiement "${name}" non trouvée dans Sellsy`);
+      throw new Error(`Aucune méthode de paiement appropriée trouvée dans Sellsy`);
     }
     
     console.log(`✅ Méthode de paiement "${paymentMethod.label}" (ID: ${paymentMethod.id}) trouvée`);
@@ -194,27 +223,35 @@ async function findPaymentMethodByName(name) {
 }
 
 /**
- * Configure les options de prélèvement GoCardless sur une facture
+ * Configure les options de prélèvement sur une facture
  */
-async function configureGoCardlessPayment(invoiceId) {
+async function configureDirectDebitPayment(invoiceId) {
   try {
-    console.log(`🔄 Configuration du paiement GoCardless pour la facture ${invoiceId}...`);
+    console.log(`🔄 Configuration du paiement par prélèvement pour la facture ${invoiceId}...`);
     
-    // Trouver l'ID de la méthode GoCardless
-    const paymentMethodId = await findPaymentMethodByName('gocardless');
+    // Trouver l'ID de la méthode de prélèvement
+    const paymentMethodId = await findPaymentMethodByName('prélèvement');
     
-    // Configurer le paiement par prélèvement GoCardless
-    await sellsyRequest('post', `/invoices/${invoiceId}/payment-details`, {
+    // Configurer le paiement par prélèvement
+    const paymentConfig = {
       payment_method_id: paymentMethodId,
       payment_terms: "on_receipt", // Paiement à réception
       use_direct_debit: true       // Utiliser le prélèvement automatique
-    });
+    };
     
-    console.log(`✅ Configuration du paiement GoCardless réussie pour la facture ${invoiceId}`);
+    console.log(`📄 Configuration du paiement: ${JSON.stringify(paymentConfig, null, 2)}`);
+    
+    const response = await sellsyRequest('post', `/invoices/${invoiceId}/payment-details`, paymentConfig);
+    
+    console.log(`✅ Configuration du paiement par prélèvement réussie pour la facture ${invoiceId}`);
     return true;
   } catch (error) {
-    console.error(`❌ Erreur lors de la configuration du prélèvement GoCardless:`, error);
-    throw error;
+    console.error(`❌ Erreur lors de la configuration du prélèvement:`, error);
+    console.error(`Détail de l'erreur:`, error.response?.data);
+    
+    // Même en cas d'erreur, on continue le processus
+    console.log(`⚠️ La configuration du prélèvement a échoué, mais la facture a été créée`);
+    return false;
   }
 }
 
@@ -226,8 +263,7 @@ export async function generateInvoice({
   serviceId,
   serviceName,
   price,
-  taxRate = 20,
-  paymentMethod = 'gocardless'
+  taxRate = 20
 }) {
   try {
     console.log(`🔄 Génération d'une facture pour ${serviceName} (client ID: ${clientId})...`);
@@ -237,8 +273,8 @@ export async function generateInvoice({
       throw new Error(`Paramètres manquants pour la génération de facture: clientId=${clientId}, serviceName=${serviceName}, price=${price}`);
     }
     
-    // 1. Trouver l'ID de la méthode de paiement GoCardless
-    const paymentMethodId = await findPaymentMethodByName(paymentMethod);
+    // 1. Trouver l'ID de la méthode de paiement "Prélèvement"
+    const paymentMethodId = await findPaymentMethodByName('prélèvement');
     
     // 2. Préparer les données de la facture
     const today = new Date();
@@ -262,27 +298,27 @@ export async function generateInvoice({
       throw new Error(`L'ID client '${clientId}' n'est pas un nombre valide`);
     }
     
+    // Format de facture correct pour l'API Sellsy
     const invoiceData = {
       date: formattedDate,
       due_date: formattedDate, // Même date = paiement à réception
       subject: `Abonnement mensuel - ${serviceName}`,
-      related: [
-        {
-          id: numericClientId,
-          type: "company"
-        }
-      ],
-      payment_method_ids: [paymentMethodId],
+      related: {
+        id: numericClientId,
+        type: "company"
+      },
+      payment_method_id: paymentMethodId,
+      note: "Facture prélevée automatiquement par prélèvement SEPA à réception. Aucune action requise de votre part.",
       rows: [
         {
-          type: "item",
+          type: "service",  // Type "service" au lieu de "item"
           name: serviceName,
           qty: 1,
           unit_price: numericPrice,
-          tax_rate: numericTaxRate
+          tax_rate: numericTaxRate,
+          unit: "unité"
         }
-      ],
-      note: "Facture prélevée automatiquement par GoCardless à réception. Aucune action requise de votre part."
+      ]
     };
     
     console.log(`📄 Données de la facture préparées: ${JSON.stringify(invoiceData, null, 2)}`);
@@ -292,8 +328,8 @@ export async function generateInvoice({
     const invoice = await sellsyRequest('post', '/invoices', invoiceData);
     console.log(`✅ Facture créée avec l'ID: ${invoice.id}`);
     
-    // 4. Configurer le prélèvement GoCardless
-    await configureGoCardlessPayment(invoice.id);
+    // 4. Configurer le prélèvement
+    await configureDirectDebitPayment(invoice.id);
     
     // 5. Valider la facture (passer de brouillon à émise)
     console.log(`🔄 Validation de la facture ${invoice.id}...`);
