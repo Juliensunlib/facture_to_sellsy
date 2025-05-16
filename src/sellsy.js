@@ -189,13 +189,13 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
     console.log(`📊 Prix: ${numericPrice}, Taux TVA: ${numericTaxRate}%, Client ID: ${numericClientId}`);
     
     // Création de l'objet facture selon la documentation de l'API Sellsy V2
+    // Correction de la structure pour correspondre aux attentes de l'API
     const invoiceData = {
       date: formattedDate,
       due_date: formattedDate,
       subject: `Abonnement mensuel - ${serviceName}`,
       currency: "EUR",
       
-      // Modification majeure ici: related est un tableau
       related: [
         {
           id: numericClientId,
@@ -210,14 +210,16 @@ export async function generateInvoice({ clientId, serviceId, serviceName, price,
       
       rows: [
         {
-          row_type: "service",
+          // Correction: utilisation de 'type' au lieu de 'row_type'
+          type: "service",
           related: {
             id: numericServiceId,
             type: "service"
           },
           name: serviceName,
           quantity: 1,
-          unit_price: numericPrice,
+          // Correction: utilisation de 'unit_amount' au lieu de 'unit_price'
+          unit_amount: numericPrice,
           tax_rate: numericTaxRate,
           unit: "unité"
         }
