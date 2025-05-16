@@ -1,11 +1,11 @@
 import dotenv from 'dotenv';
 import Airtable from 'airtable';
-import { generateInvoice, checkSellsyConnection } from './sellsy.js';
-import { formatDate, calculateDueDate } from './utils.js';
+import { generateInvoice, checkSellsyConnection, verifyGoCardlessMandate } from './sellsy.js';
+import { formatDate, calculateDueDate, isToday } from './utils.js';
 
 dotenv.config();
 
-// Vérification des variables d’environnement
+// Vérification des variables d'environnement
 const requiredEnv = [
   'AIRTABLE_API_KEY',
   'AIRTABLE_BASE_ID',
@@ -40,7 +40,19 @@ async function main() {
       if (!shouldInvoiceToday(abonnement)) continue;
 
       const services = await fetchServicesForAbonnement(abonnement);
-      if (!services.length) continue;
+      if (!services.length) {
+        console.log(`ℹ️ Aucun service actif trouvé pour l'abonnement ${abonnement.id}`);
+        continue;
+      }
+
+      // Vérifier que le client a un mandat GoCardless valide avant de générer les factures
+      const clientSellsyId = abonnement.fields['ID_Sellsy_abonné'];
+      const mandate = await verifyGoCardlessMandate(clientSellsyId);
+      
+      if (!mandate) {
+        console.warn(`⚠️ Aucun mandat GoCardless actif trouvé pour le client ID ${clientSellsyId}. Les factures ne seront pas générées.`);
+        continue;
+      }
 
       const count = await generateInvoices(abonnement, services);
       totalInvoices += count;
@@ -57,9 +69,34 @@ function shouldInvoiceToday(abonnement) {
   const today = new Date().getDate();
   const billingDay = parseInt(abonnement.fields['Jour de facturation'], 10);
 
-  if (!billingDay || today !== billingDay) {
-    console.log(`ℹ️ Abonnement ${abonnement.id} : pas de facturation aujourd'hui`);
+  // Vérifier si le jour de facturation est valide
+  if (!billingDay || isNaN(billingDay) || billingDay < 1 || billingDay > 31) {
+    console.warn(`⚠️ Abonnement ${abonnement.id} : jour de facturation invalide (${abonnement.fields['Jour de facturation']})`);
     return false;
+  }
+
+  // Cas spécial pour les mois avec moins de 31 jours - facturer le dernier jour du mois
+  const currentDate = new Date();
+  const lastDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
+  
+  // Si on est le dernier jour du mois et le jour de facturation est supérieur au nombre de jours du mois
+  if (today === lastDayOfMonth && billingDay > lastDayOfMonth) {
+    console.log(`✅ Abonnement ${abonnement.id} : facturation effectuée le dernier jour du mois (${today}) car le jour configuré (${billingDay}) n'existe pas ce mois-ci`);
+    return true;
+  }
+
+  if (today !== billingDay) {
+    console.log(`ℹ️ Abonnement ${abonnement.id} : pas de facturation aujourd'hui (jour ${today}, jour de facturation configuré: ${billingDay})`);
+    return false;
+  }
+
+  // Vérifier la date de début d'abonnement
+  if (abonnement.fields['Date de début']) {
+    const startDate = new Date(abonnement.fields['Date de début']);
+    if (startDate > new Date()) {
+      console.log(`ℹ️ Abonnement ${abonnement.id} : la date de début (${formatDate(startDate)}) est dans le futur`);
+      return false;
+    }
   }
 
   console.log(`✅ Abonnement ${abonnement.id} : facturation prévue aujourd'hui`);
@@ -67,18 +104,32 @@ function shouldInvoiceToday(abonnement) {
 }
 
 async function fetchAbonnementsActifs() {
-  const records = await abonnementsTable.select({
-    filterByFormula: `Statut = 'Actif'`,
-    view: 'Grid view',
-  }).all();
+  try {
+    const records = await abonnementsTable.select({
+      filterByFormula: `Statut = 'Actif'`,
+      view: 'Grid view',
+    }).all();
 
-  return records.map((r) => ({ id: r.id, fields: r.fields }));
+    return records.map((r) => ({ id: r.id, fields: r.fields }));
+  } catch (err) {
+    console.error('❌ Erreur lors de la récupération des abonnements actifs:', err.message);
+    return [];
+  }
 }
 
 async function fetchServicesForAbonnement(abonnement) {
   const ids = abonnement.fields['Services liés'] || [];
   const clientSellsyId = abonnement.fields['ID_Sellsy_abonné'];
-  if (!clientSellsyId || !ids.length) return [];
+  
+  if (!clientSellsyId) {
+    console.warn(`⚠️ Abonnement ${abonnement.id} : ID_Sellsy_abonné manquant`);
+    return [];
+  }
+  
+  if (!ids.length) {
+    console.warn(`⚠️ Abonnement ${abonnement.id} : aucun service lié`);
+    return [];
+  }
 
   const validServices = [];
 
@@ -87,9 +138,29 @@ async function fetchServicesForAbonnement(abonnement) {
       const service = await servicesTable.find(id);
       const { fields } = service;
 
+      // Vérifier si le service est actif et de catégorie Abonnement
       if ((fields['Actif'] !== 'Actif' && fields['Actif'] !== true) ||
-          fields['Catégorie'] !== 'Abonnement' ||
-          fields['ID_Sellsy_abonné'] !== clientSellsyId) {
+          fields['Catégorie'] !== 'Abonnement') {
+        console.log(`ℹ️ Service ${id} ignoré: ${!fields['Actif'] ? 'inactif' : 'pas un abonnement'}`);
+        continue;
+      }
+
+      // Vérifier que le service correspond au même client que l'abonnement
+      if (fields['ID_Sellsy_abonné'] !== clientSellsyId) {
+        console.warn(`⚠️ Service ${id} : ID_Sellsy_abonné (${fields['ID_Sellsy_abonné']}) ne correspond pas à l'abonnement (${clientSellsyId})`);
+        continue;
+      }
+
+      // Vérifier qu'il reste des occurrences à facturer
+      const occRestantes = fields['Occurrences restantes'] !== undefined ? parseInt(fields['Occurrences restantes'], 10) : 0;
+      if (isNaN(occRestantes) || occRestantes <= 0) {
+        console.log(`ℹ️ Service ${id} ignoré: aucune occurrence restante (${fields['Occurrences restantes']})`);
+        continue;
+      }
+
+      // Vérifier que le service a un ID Sellsy valide
+      if (!fields['ID Sellsy']) {
+        console.warn(`⚠️ Service ${id} : ID Sellsy manquant`);
         continue;
       }
 
@@ -104,12 +175,17 @@ async function fetchServicesForAbonnement(abonnement) {
 
 async function generateInvoices(abonnement, services) {
   let count = 0;
+  const clientId = abonnement.fields['ID_Sellsy_abonné'];
+  const abonnementName = abonnement.fields['Nom de l\'abonnement'] || 'Abonnement sans nom';
+
+  console.log(`📝 Génération des factures pour l'abonnement "${abonnementName}" (client ${clientId})`);
 
   for (const service of services) {
     const { fields } = service;
 
-    const occRestantes = fields['Occurrences restantes'] || 0;
-    if (occRestantes <= 0) {
+    // Ces vérifications sont redondantes avec fetchServicesForAbonnement, mais assurent la cohérence
+    const occRestantes = parseInt(fields['Occurrences restantes'] || '0', 10);
+    if (isNaN(occRestantes) || occRestantes <= 0) {
       console.log(`ℹ️ Service ${service.id} : aucune occurrence restante`);
       continue;
     }
@@ -120,20 +196,28 @@ async function generateInvoices(abonnement, services) {
       continue;
     }
 
+    // Préparer les données pour la facture
     const invoiceData = {
-      clientId: abonnement.fields['ID_Sellsy_abonné'],
+      clientId: clientId,
       serviceId: sellsyServiceId,
       serviceName: fields['Nom du service'],
       price: fields['Prix HT'],
       taxRate: fields['Taux TVA'] || 20,
-      paymentMethod: 'prélèvement',
+      paymentMethod: 'prélèvement', // Méthode configurée pour GoCardless
     };
 
     try {
-      await generateInvoice(invoiceData);
-      await decrementOccurrences(service.id);
-      console.log(`✅ Facture créée pour service ${fields['Nom du service']} (${service.id})`);
-      count++;
+      // Générer la facture avec prélèvement GoCardless
+      const invoice = await generateInvoice(invoiceData);
+      
+      if (invoice && invoice.id) {
+        // Mettre à jour les compteurs d'occurrences uniquement si la facture a été créée
+        await decrementOccurrences(service.id);
+        console.log(`✅ Facture ${invoice.id} créée pour service "${fields['Nom du service']}" (${service.id})`);
+        count++;
+      } else {
+        console.warn(`⚠️ Facture non créée pour service ${service.id} : réponse inattendue de l'API`);
+      }
     } catch (err) {
       console.error(`❌ Erreur facturation service ${service.id} :`, err.message);
     }
@@ -145,10 +229,15 @@ async function generateInvoices(abonnement, services) {
 async function decrementOccurrences(serviceId) {
   try {
     const record = await servicesTable.find(serviceId);
-    const moisFactures = (record.fields['Mois facturés'] || 0) + 1;
-    const totalOccurrences = record.fields['Occurrences totales'] || 0;
+    
+    // Récupérer les valeurs actuelles avec conversion en nombre
+    const moisFactures = parseInt(record.fields['Mois facturés'] || '0', 10) + 1;
+    const totalOccurrences = parseInt(record.fields['Occurrences totales'] || '0', 10);
+    
+    // Calculer les occurrences restantes
     const restants = Math.max(0, totalOccurrences - moisFactures);
 
+    // Mettre à jour les compteurs dans Airtable
     await servicesTable.update(serviceId, {
       'Mois facturés': moisFactures,
       'Occurrences restantes': restants,
